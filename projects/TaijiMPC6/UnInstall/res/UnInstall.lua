@@ -5,7 +5,9 @@
 --   OnInitialize()  -- when the window is ready
 --   PreSetup()      -- after the user confirms, on the worker thread
 -- and afterwards recursively deletes the directory the running UnInstall.exe
--- lives in (e.g. <InstallPath>\TaiJiMPC6) and self-deletes it.
+-- lives in (<InstallPath>\Uninstall, from Common.7z, which every installation
+-- has whatever components were selected) and self-deletes it. Installers
+-- before the component page put UnInstall.exe into <InstallPath>\TaiJiMPC6.
 --
 -- Therefore PreSetup() performs all product-specific cleanup (stopping
 -- services, unregistering COM servers, removing registry keys / shortcuts and
@@ -16,7 +18,7 @@ local DEFAULT_INSTALL_PATH = "C:\\TaijiControl"
 
 local _dirCompany = DEFAULT_INSTALL_PATH
 -- The directory that holds the running UnInstall.exe; the native host removes it.
-local _dirExeHome = _dirCompany .. "\\TaiJiMPC6"
+local _dirExeHome = _dirCompany .. "\\Uninstall"
 
 local _strResourceCN = {
     SETUP        = "泰极MPC卸载程序",
@@ -35,7 +37,7 @@ local function resetInstallPath(installPath)
         installPath = DEFAULT_INSTALL_PATH
     end
     _dirCompany = installPath
-    _dirExeHome = _dirCompany .. "\\TaiJiMPC6"
+    _dirExeHome = _dirCompany .. "\\Uninstall"
 end
 
 local function deleteIfExists(path)
@@ -122,7 +124,7 @@ function PreSetup()
 
     -- 5. Run uninstall counterparts of the install_*.bat scripts, when present.
     runUninstallBatch(_dirCompany .. "\\TaiJiDataSvc\\uninstall_TaiJiDataSvc.bat", 30)
-    runUninstallBatch(_dirCompany .. "\\TaiJiDataClient\\uninstall_TaiJiDataClient.bat", 30)
+    runUninstallBatch(_dirCompany .. "\\TaiJiDataClient\\uninstall_TaijiDataCollector.bat", 30)
     runUninstallBatch(_dirCompany .. "\\TaijiPYSim\\uninstall_taijiopcsim.bat", 30)
     runUninstallBatch(_dirCompany .. "\\HostVM\\uninstall_python_env.bat", 10)
 
@@ -166,6 +168,8 @@ function PreSetup()
     --      UnInstall.exe lives in (_dirExeHome); the native host removes that one.
     --      TaiJiMPC5 is the client left over from the combined packages.
     deleteIfExists(_dirCompany .. "\\TaiJiMPC5")
+    deleteIfExists(_dirCompany .. "\\TaiJiMPC6")
+    deleteIfExists(_dirCompany .. "\\Tools")
     deleteIfExists(_dirCompany .. "\\WinPy313")
     deleteIfExists(_dirCompany .. "\\Win32")
     deleteIfExists(_dirCompany .. "\\TaiJiDataSvc")

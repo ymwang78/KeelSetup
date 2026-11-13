@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <vector>
 
@@ -31,4 +31,7 @@ public:
 	int save_file(LPCTSTR lpszFile, const void * lpBuf, DWORD dwSize);
 	int unzip_7z_file(ResourceHandler* resHandler, const std::wstring& mUnPackPath, HWND callback, UINT Msg, UINT nNotifyID, const std::vector<std::wstring>& skipPrefixes = {});
 	int getunzipfilenum(ResourceHandler* resHandler);
+	// Reads only the archive header: the unpacked size of all files and the number of entries
+	// (files and directories). False when the resource is not a readable 7z archive.
+	bool get_package_info(ResourceHandler* resHandler, unsigned long long& totalSize, unsigned& entryCount);
 };

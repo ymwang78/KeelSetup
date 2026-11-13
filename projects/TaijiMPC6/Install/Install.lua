@@ -3,51 +3,509 @@
 -- Resource ID constants (mirrors resource.h)
 local RES = {
     LICENSE  = 133,  -- IDR_REGCONTENT1
-    SOFT1    = 134,  -- IDR_INSTALLSOFT1 (Win32.7z)
-    SOFT2    = 139,  -- IDR_INSTALLSOFT2 (WinPy313.7z)
-    SOFT3    = 140,  -- IDR_INSTALLSOFT3 (TaiJiDataSvc.7z)
     BACKGROUND = 138, -- IDB_RES_BACKGROUND
 }
 
--- apps/xOptCon/build_TaijiMPC6.py writes the release version here at build time and restores it afterwards.
+-- apps/KeelDeck/build_TaijiMPC6.py writes the release version here at build time and restores it afterwards.
 local _VERSION = "5.2.41.3"
 local _dirCompany = "C:\\TaijiControl"
 local _dirExeHomeDir = _dirCompany .. "\\TaiJiMPC6"
 local _dirExeFullPath = _dirCompany .. "\\TaiJiMPC6\\TaiJiMPC.exe"
 
 local _bCustomPath = false
-local _installTaiJiDataSvc = false
 
 local _strResourceCN = {
 	SETUP = "泰极MPC安装程序",
 	CHOOSE_INSTALL_PATH = "选择安装路径",
 	LICENSE = "安装许可协议",
+	COMPONENTS = "选择安装组件",
+	COMPONENTS_OK = "确定",
 	SPACE_NOT_ENOUGH = "系统空间不足",
-	SPACE_HINT = "系统空间不足，需要500M以上空间，请另外选择安装位置",
+	SPACE_HINT = "安装位置空间不足：需要约 %s，可用 %s，请另外选择安装位置",
+	SPACE_LABEL = "所需空间约 %s，可用 %s",
 	MKDIR_FAILED = "创建目录失败: ",
 	LOADING = "正在加载",
 	HOSTVM_CONFIG_FAILED = "无法生成 HostVM 配置文件: ",
 	ICU_FAILED = "无法部署 ICU 运行库: ",
+	REQUIRED = "必装",
+	INSTALLED = "已安装",
+	INSTALLED_VERSION = "已安装版本 %s",
+	KEPT = "已安装，保留现有数据，不会重新安装",
+	NOTHING_SELECTED = "请至少选择一个组件",
+	UNKNOWN_COMPONENT = "未知组件: ",
+	UNAVAILABLE_COMPONENT = "本安装包无法安装的组件: ",
+	HINT_ADDED = "已同时选择 %s（%s 需要）",
+	HINT_REMOVED = "已同时取消 %s（它需要 %s）",
+	HINT_MISSING = "无法选择 %s：安装包不含 %s",
+	LIST_SEP = "、",
+	HINT_SEP = "；",
 }
 
 local _strResourceEN = {
 	SETUP = "Setup",
 	CHOOSE_INSTALL_PATH = "Choose Install Path",
 	LICENSE = "License Agreement",
+	COMPONENTS = "Select Components",
+	COMPONENTS_OK = "OK",
 	SPACE_NOT_ENOUGH = "System space is not enough",
-	SPACE_HINT = "System space is not enough, need more than 500M, please choose another install path",
+	SPACE_HINT = "Not enough space at the install path: needs about %s, %s free. Please choose another install path",
+	SPACE_LABEL = "Needs about %s, %s free",
 	MKDIR_FAILED = "Make dir failed: ",
 	LOADING = "Loading",
 	HOSTVM_CONFIG_FAILED = "Failed to create the HostVM config: ",
 	ICU_FAILED = "Failed to deploy the ICU runtime: ",
+	REQUIRED = "required",
+	INSTALLED = "installed",
+	INSTALLED_VERSION = "Installed version %s",
+	KEPT = "Installed; the existing data is kept and it is not reinstalled",
+	NOTHING_SELECTED = "Select at least one component",
+	UNKNOWN_COMPONENT = "Unknown component: ",
+	UNAVAILABLE_COMPONENT = "Components this installer cannot install: ",
+	HINT_ADDED = "Also selected %s (needed by %s)",
+	HINT_REMOVED = "Also deselected %s (it needs %s)",
+	HINT_MISSING = "Cannot select %s: this installer lacks %s",
+	LIST_SEP = ", ",
+	HINT_SEP = "; ",
 }
 
 local _strResource = _strResourceCN
+local _lang = 1  -- index into the {Chinese, English} name pairs below
 
 function ResetInstallPath(installPath)
     _dirCompany = installPath
     _dirExeHomeDir = _dirCompany .. "\\TaiJiMPC6"
     _dirExeFullPath = _dirCompany .. "\\TaiJiMPC6\\TaiJiMPC.exe"
+end
+
+----------------------------------------------------------------------------------------------------
+-- Components
+--
+-- The component page lists these groups and items. Every item is one INSTALLSOFT archive (res: its
+-- ID in resource.h, file name in Install.rc); archives keep their paths relative to the install
+-- root, so the installed layout does not depend on what was selected. A group only gathers its
+-- items. The skin's controls are grp_<group> and item_<group>_<item>.
+--   required         always installed; its checkbox is disabled
+--   deps             items it cannot run without. Selecting it also selects those that are not
+--                    installed yet; deselecting one of those also deselects it
+--   marker           path under the install root that exists once the item is installed
+--   keepIfInstalled  never extracted over an existing installation (TaiJiDataSvc keeps its database)
+-- An item whose archive this installer does not carry (installx.PackageInfo returns nil) is hidden.
+-- /components=<list> on the command line selects groups ("TaijiMPC") and items ("TaijiSim.OPCSim").
+local COMPONENTS = {
+    { id = "Common", name = {"公共组件", "Common"}, items = {
+        { id = "Runtime", res = 150, required = true, marker = "Common\\vcredist",
+          name = {"基础运行库", "Runtime"},
+          desc = {"VC++ 运行库、ICU、OPC 核心组件和卸载程序", "VC++ runtime, ICU, OPC core components and the uninstaller"} },
+        { id = "Ident", res = 151, marker = "Common\\Ident32",
+          name = {"辨识组件", "Identification"},
+          desc = {"32 位辨识 Worker、它的运行库和加密狗驱动", "32-bit identification worker, its runtime and the Sentinel driver"} },
+        { id = "WinPy313", res = 152, marker = "WinPy313\\python\\python.exe",
+          name = {"Python 3.13 环境", "Python 3.13"},
+          desc = {"WinPy313，含 MPC 算法包", "WinPy313 with the MPC algorithm packages"} },
+    }},
+    { id = "TaijiMPC", name = {"TaijiMPC", "TaijiMPC"}, items = {
+        { id = "HostVM", res = 160, marker = "HostVM\\HostVM.exe", deps = {"Common.WinPy313", "Common.Ident"},
+          name = {"HostVM 服务", "HostVM service"},
+          desc = {"后台服务，运行 MPC 算法与辨识", "Background service running MPC and identification"} },
+        { id = "TaijiMPC6", res = 161, marker = "TaiJiMPC6\\TaiJiMPC.exe",
+          name = {"TaijiMPC6 客户端", "TaijiMPC6 client"},
+          desc = {"TaijiMPC6 组态与监控客户端", "TaijiMPC6 configuration and monitoring client"} },
+    }},
+    { id = "DataService", name = {"DataService", "DataService"}, items = {
+        { id = "Svr", res = 170, marker = "TaiJiDataSvc", keepIfInstalled = true,
+          name = {"数据服务 Svr", "Data server"},
+          desc = {"TaiJiDataSvc 数据库服务（PostgreSQL）", "TaiJiDataSvc database service (PostgreSQL)"} },
+        -- DataCollector.exe (like DataViewer.exe and tsdbAdmin.exe) only launches its .py: it loads
+        -- python3.dll from Software\TaijiControl\PythonEnv and calls Py_Main.
+        { id = "Client", res = 171, marker = "TaiJiDataClient\\DataCollector.exe", deps = {"Common.WinPy313"},
+          name = {"数据采集 Client", "Data collector"},
+          desc = {"TaiJiDataCollector 采集服务", "TaiJiDataCollector service"} },
+    }},
+    { id = "TaijiSim", name = {"TaijiSim", "TaijiSim"}, items = {
+        { id = "OPCSim", res = 180, marker = "TaiJiOPCSim\\bin\\TaiJiOPCSim.exe",
+          name = {"OPC 仿真 OPCSim", "OPC simulator"},
+          desc = {"TaiJiOPCSim，32 位 OPC DA 仿真服务器", "TaiJiOPCSim, a 32-bit OPC DA simulation server"} },
+        -- The OPC server taiji-opcsim-server.exe is self-contained, but pySim.exe, which runs the
+        -- simulation model, is a pySim.py launcher like DataCollector.exe.
+        { id = "PYSim", res = 181, marker = "TaiJiPYSim\\opcserver_win_i386\\taiji-opcsim-server.exe", deps = {"Common.WinPy313"},
+          name = {"Python 仿真 PYSim", "Python simulator"},
+          desc = {"TaiJiPYSim 仿真服务", "TaiJiPYSim simulation service"} },
+    }},
+    { id = "Tool", name = {"Tool", "Tools"}, items = {
+        { id = "RUS", res = 190, marker = "Tools\\RUS_TJC.exe",
+          name = {"RUS_TJC 授权工具", "RUS_TJC license tool"},
+          desc = {"加密狗授权更新工具", "Sentinel license update tool"} },
+    }},
+}
+
+-- Installed components and the version that installed them, for upgrades and the uninstaller.
+local COMPONENTS_KEY = "Software\\TaijiControl\\TaiJiMPC6\\Components"
+-- A group whose items are only partly selected draws a blue square inside its empty checkbox:
+-- a solid patch of the checked checkbox in setup.png (IDB_RES_PNG), scaled into the middle.
+local PARTIAL_IMAGE = "res='130' restype='png' source='602,3,606,7' dest='5,5,13,13'"
+local MB = 1024 * 1024
+
+local _order = {}      -- items in page order
+local _items = {}      -- "Group.Item" -> item
+local _selected = {}   -- "Group.Item" -> true when it is to be installed in this run
+local _installed = {}  -- "Group.Item" -> true when its marker exists under the install path
+local _hint = nil      -- what the last click selected or deselected besides the clicked item
+local _argError = nil  -- unknown names in /components
+
+local function L(pair)
+    return pair[_lang] or pair[1]
+end
+
+local function FormatSize(bytes)
+    if bytes >= 1024 * MB then
+        return string.format("%.1f GB", bytes / (1024 * MB))
+    end
+    return string.format("%d MB", math.max(1, math.ceil(bytes / MB)))
+end
+
+-- true: always selected (required); false: never selected (kept installation); nil: up to the user.
+local function LockedState(item)
+    if item.required then return true end
+    if item.keepIfInstalled and _installed[item.key] then return false end
+    return nil
+end
+
+local function GroupById(groupId)
+    for _, group in ipairs(COMPONENTS) do
+        if group.id:lower() == tostring(groupId):lower() then return group end
+    end
+end
+
+function RefreshInstalledComponents()
+    for _, item in ipairs(_order) do
+        _installed[item.key] = installx.FilePathExists(_dirCompany .. "\\" .. item.marker) == true
+        local locked = LockedState(item)
+        if locked ~= nil or item.info == nil then
+            _selected[item.key] = (locked == true and item.info ~= nil) or nil
+        end
+    end
+end
+
+-- Reads which archives the installer carries and what is installed, and selects the defaults:
+-- everything for a fresh install, the installed components for an upgrade.
+function LoadComponents()
+    _order, _items, _selected, _installed, _hint = {}, {}, {}, {}, nil
+    for _, group in ipairs(COMPONENTS) do
+        group.control = "grp_" .. group.id
+        for _, item in ipairs(group.items) do
+            item.group = group
+            item.key = group.id .. "." .. item.id
+            item.control = "item_" .. group.id .. "_" .. item.id
+            item.info = installx.PackageInfo(item.res)
+            if item.info == nil then
+                installx.LogPrint("Component " .. item.key .. " not in this installer (resource " .. item.res .. ")")
+            end
+            table.insert(_order, item)
+            _items[item.key] = item
+        end
+    end
+    RefreshInstalledComponents()
+    local upgrade = false
+    for _, item in ipairs(_order) do
+        if item.info and not item.required and _installed[item.key] then upgrade = true end
+    end
+    for _, item in ipairs(_order) do
+        if item.info and LockedState(item) == nil and (not upgrade or _installed[item.key]) then
+            -- Through SelectComponent: an item whose dependency is neither installed nor in this
+            -- installer stays deselected.
+            SelectComponent(item.key, true)
+        end
+    end
+end
+
+local function NewNotes()
+    return {added = {}, removed = {}, missing = {}}
+end
+
+local function DependsOn(item, key)
+    for _, dep in ipairs(item.deps or {}) do
+        if dep == key then return true end
+    end
+    return false
+end
+
+-- Selects or deselects one item and whatever its dependencies require; notes (optional) collects
+-- those extra changes for the hint line. Returns whether the item ends up as asked.
+function SelectComponent(key, on, notes)
+    local item = _items[key]
+    if item == nil or item.info == nil then return false end
+    local locked = LockedState(item)
+    if locked ~= nil then
+        return locked == on
+    end
+    if on then
+        if _selected[key] then return true end
+        for _, dep in ipairs(item.deps or {}) do
+            local depItem = _items[dep]
+            if not _installed[dep] and (depItem == nil or depItem.info == nil) then
+                if notes then table.insert(notes.missing, {key, dep}) end
+                return false
+            end
+        end
+        _selected[key] = true
+        for _, dep in ipairs(item.deps or {}) do
+            if not _selected[dep] and not _installed[dep] then
+                SelectComponent(dep, true, notes)
+                if notes then table.insert(notes.added, {dep, key}) end
+            end
+        end
+    else
+        if not _selected[key] then return true end
+        _selected[key] = nil
+        if not _installed[key] then
+            for _, other in ipairs(_order) do
+                if _selected[other.key] and DependsOn(other, key) then
+                    SelectComponent(other.key, false, notes)
+                    if notes then table.insert(notes.removed, {other.key, key}) end
+                end
+            end
+        end
+    end
+    return true
+end
+
+-- "all", "none" or "partial", over the items the user can have: a required item counts as
+-- selected, a kept installation (never selected) does not count.
+function ComponentGroupState(groupId)
+    local group = GroupById(groupId)
+    local total, chosen = 0, 0
+    for _, item in ipairs(group and group.items or {}) do
+        if item.info and LockedState(item) ~= false then
+            total = total + 1
+            if _selected[item.key] then chosen = chosen + 1 end
+        end
+    end
+    if total > 0 and chosen == total then return "all" end
+    if chosen == 0 then return "none" end
+    return "partial"
+end
+
+-- A click on a group selects all its items, or deselects them when all were selected.
+function SelectComponentGroup(groupId, notes)
+    local group = GroupById(groupId)
+    if group == nil then return end
+    local on = ComponentGroupState(group.id) ~= "all"
+    for _, item in ipairs(group.items) do
+        if item.info and LockedState(item) == nil then
+            SelectComponent(item.key, on, notes)
+        end
+    end
+end
+
+-- /components=<names>: exactly the named groups and items (and what they need) besides the
+-- required ones. Returns the names it does not know, and the requested items it cannot install
+-- (no archive in this installer, or a dependency that is neither installed nor in it). An
+-- installed item counts as satisfied even when it is not selected: it stays as it is, as a
+-- kept TaiJiDataSvc does.
+function ApplyComponentArg(text)
+    _selected = {}
+    for _, item in ipairs(_order) do
+        if item.info and LockedState(item) == true then _selected[item.key] = true end
+    end
+    local unknown, unavailable = {}, {}
+    for token in tostring(text):gmatch("[^,;%s]+") do
+        local wanted = token:lower()
+        local found = false
+        for _, item in ipairs(_order) do
+            if item.group.id:lower() == wanted or item.key:lower() == wanted then
+                found = true
+                if not SelectComponent(item.key, true) and not _installed[item.key] then
+                    table.insert(unavailable, item.key)
+                end
+            end
+        end
+        if not found then table.insert(unknown, token) end
+    end
+    return unknown, unavailable
+end
+
+-- Selects the missing dependencies of every selected item again, or deselects an item whose
+-- dependency cannot be had. Needed after the install path changes: a dependency that was
+-- installed at the old path (so not selected) may be missing at the new one.
+function ReconcileComponentDependencies(notes)
+    local changed = true
+    while changed do
+        changed = false
+        for _, item in ipairs(_order) do
+            if _selected[item.key] and LockedState(item) == nil then
+                for _, dep in ipairs(item.deps or {}) do
+                    if not _selected[dep] and not _installed[dep] then
+                        changed = true
+                        local depItem = _items[dep]
+                        if depItem and depItem.info and SelectComponent(dep, true, notes) then
+                            if notes then table.insert(notes.added, {dep, item.key}) end
+                        else
+                            _selected[item.key] = nil
+                            if notes then table.insert(notes.missing, {item.key, dep}) end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+function ComponentSelected(key)
+    return _selected[key] == true
+end
+
+-- Installed on this machine once this run is done.
+function ComponentPresent(key)
+    return _selected[key] == true or _installed[key] == true
+end
+
+-- The archives this run extracts, biggest first: the extractor runs a few at a time, and the
+-- biggest archive started last would finish last.
+function ComponentPlan()
+    local plan = {}
+    for _, item in ipairs(_order) do
+        if _selected[item.key] and item.info then table.insert(plan, item) end
+    end
+    table.sort(plan, function(a, b)
+        if a.info.size ~= b.info.size then return a.info.size > b.info.size end
+        return a.res < b.res
+    end)
+    return plan
+end
+
+-- Bytes the install path must have free: all of a new component, a tenth of one that is
+-- overwritten (only its growth), and some room for the post-setup steps.
+function ComponentSpaceNeeded()
+    local need = 100 * MB
+    for _, item in ipairs(ComponentPlan()) do
+        if _installed[item.key] then
+            need = need + item.info.size // 10
+        else
+            need = need + item.info.size
+        end
+    end
+    return need
+end
+
+local function FreeSpaceAt(path)
+    local root = tostring(path):match("^%a:\\") or tostring(path):match("^%a:$")
+    if root and #root == 2 then root = root .. "\\" end
+    return installx.DiskFreeSpace(root or path)
+end
+
+local function DescribeNotes(notes)
+    local function names(keys)
+        local list = {}
+        for _, key in ipairs(keys) do table.insert(list, L(_items[key].name)) end
+        return table.concat(list, _strResource.LIST_SEP)
+    end
+    local parts = {}
+    -- Group the items added for one dependent: "selected A, B (needed by C)".
+    local addedBy, addedOrder = {}, {}
+    for _, entry in ipairs(notes.added) do
+        if addedBy[entry[2]] == nil then
+            addedBy[entry[2]] = {}
+            table.insert(addedOrder, entry[2])
+        end
+        table.insert(addedBy[entry[2]], entry[1])
+    end
+    for _, by in ipairs(addedOrder) do
+        table.insert(parts, string.format(_strResource.HINT_ADDED, names(addedBy[by]), L(_items[by].name)))
+    end
+    for _, entry in ipairs(notes.removed) do
+        table.insert(parts, string.format(_strResource.HINT_REMOVED, L(_items[entry[1]].name), L(_items[entry[2]].name)))
+    end
+    for _, entry in ipairs(notes.missing) do
+        local dep = _items[entry[2]]
+        table.insert(parts, string.format(_strResource.HINT_MISSING, L(_items[entry[1]].name), dep and L(dep.name) or entry[2]))
+    end
+    if #parts == 0 then return nil end
+    return table.concat(parts, _strResource.HINT_SEP)
+end
+
+local function ComponentLabel(item)
+    local text = L(item.name) .. "  " .. FormatSize(item.info.size)
+    if item.required then
+        text = text .. " · " .. _strResource.REQUIRED
+    elseif _installed[item.key] then
+        text = text .. " · " .. _strResource.INSTALLED
+    end
+    return text
+end
+
+local function ComponentTooltip(item)
+    local text = L(item.desc)
+    if item.keepIfInstalled and _installed[item.key] then
+        text = text .. "\n" .. _strResource.KEPT
+    end
+    if _installed[item.key] then
+        local version = installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, COMPONENTS_KEY, item.key)
+        if version ~= nil and version ~= "" then
+            text = text .. "\n" .. string.format(_strResource.INSTALLED_VERSION, tostring(version))
+        end
+    end
+    return text
+end
+
+local function SetAttribute(control, name, value)
+    if installx.DuiAttribute then installx.DuiAttribute(control, name, value) end
+end
+
+-- Writes the selection state into the component page. DuiOptionSelect(..., false) does not send
+-- selectchanged, so this does not re-enter OnSelChanged.
+function RefreshComponentPage()
+    for _, group in ipairs(COMPONENTS) do
+        local shown, selectable = false, false
+        for _, item in ipairs(group.items) do
+            installx.DuiVisible(item.control, item.info ~= nil)
+            if item.info then
+                shown = true
+                local locked = LockedState(item)
+                selectable = selectable or locked == nil
+                installx.DuiText(item.control, ComponentLabel(item))
+                installx.DuiOptionSelect(item.control, _selected[item.key] == true, false)
+                installx.DuiEnable(item.control, locked == nil)
+                SetAttribute(item.control, "tooltip", ComponentTooltip(item))
+            end
+        end
+        local state = ComponentGroupState(group.id)
+        installx.DuiVisible(group.control, shown)
+        installx.DuiText(group.control, L(group.name))
+        installx.DuiOptionSelect(group.control, state == "all", false)
+        installx.DuiEnable(group.control, selectable)
+        SetAttribute(group.control, "foreimage", state == "partial" and PARTIAL_IMAGE or "")
+    end
+    installx.DuiText("compokbtn", _strResource.COMPONENTS_OK)
+    installx.DuiText("comphintlab", _hint or "")
+    local need, free = ComponentSpaceNeeded(), FreeSpaceAt(_dirCompany)
+    installx.DuiText("compspacelab", string.format(_strResource.SPACE_LABEL, FormatSize(need), free and FormatSize(free) or "?"))
+    installx.DuiTextColor("compspacelab", (free and free < need) and 0xFFFF0000 or 0xFF7F7F7F)
+end
+
+----------------------------------------------------------------------------------------------------
+-- Pages
+
+local function ShowMainPage()
+    installx.DuiTabSelect("installlayout", 0)
+    installx.DuiVisible("sureportlayout", true)
+    installx.DuiVisible("custombtn", true)
+    installx.DuiText("titletext", _strResource.SETUP)
+    installx.DuiTextColor("titletext", 0xFFFFFFFF)
+    installx.DuiSetBkImage("mainlayout", "res='" .. RES.BACKGROUND .. "' restype='png' source='0,0,600,221' corner='300,208,5,5'")
+end
+
+local function ShowComponentPage()
+    if (installx.DuiVisible("customlayout")) then
+        CustomLayeroutHide()
+    end
+    installx.DuiTabSelect("installlayout", 2)
+    -- The page uses the height of the bottom bar, whose links do not apply to it.
+    installx.DuiVisible("sureportlayout", false)
+    installx.DuiText("titletext", _strResource.COMPONENTS)
+    installx.DuiTextColor("titletext", 0xFF5DA5FF)
+    installx.DuiSetBkImage("mainlayout", "res='" .. RES.BACKGROUND .. "' restype='png' source='20,210,80,216'")
+    RefreshComponentPage()
 end
 
 function OnInitialize()
@@ -59,11 +517,32 @@ function OnInitialize()
     installx.DuiText("pathedit", _dirCompany)
 	local acp = installx.SysACP()
 	if acp == 936 then
-		_strResource = _strResourceCN
+		_strResource, _lang = _strResourceCN, 1
 	else
-		_strResource = _strResourceEN
+		_strResource, _lang = _strResourceEN, 2
 	end
 	installx.LogPrint("ACP: ", acp)
+
+	LoadComponents()
+	local arg = installx.SysGetArg("components")
+	if type(arg) == "string" then
+		local unknown, unavailable = ApplyComponentArg(arg)
+		local problems = {}
+		if #unknown > 0 then
+			table.insert(problems, _strResource.UNKNOWN_COMPONENT .. table.concat(unknown, ", "))
+		end
+		if #unavailable > 0 then
+			table.insert(problems, _strResource.UNAVAILABLE_COMPONENT .. table.concat(unavailable, ", "))
+		end
+		if #problems > 0 then
+			-- A silent install refuses to start rather than report success without them; with
+			-- the page the user can correct the selection.
+			_argError = table.concat(problems, _strResource.HINT_SEP)
+			installx.LogPrint(_argError)
+			ErrorHint(_argError)
+		end
+	end
+	RefreshComponentPage()
 end
 
 function OnButtonClick(btnName)
@@ -77,19 +556,27 @@ function OnButtonClick(btnName)
             installx.DuiWindowPos("_MainFrame", 0, 0, 600, 380)
         end
     elseif (btnName == "browfilebtn") then
-        installPath = installx.FilePathChoose(_strResource.CHOOSE_INSTALL_PATH, _dirCompany)
-        installx.DuiText("pathedit", installPath)
-        ResetInstallPath(installPath)
+        local installPath = installx.FilePathChoose(_strResource.CHOOSE_INSTALL_PATH, _dirCompany)
+        if installPath ~= nil and installPath ~= "" then
+            installx.DuiText("pathedit", installPath)
+            ResetInstallPath(installPath)
+            -- Installed components, and so locks, dependencies and space, belong to the install path.
+            RefreshInstalledComponents()
+            local notes = NewNotes()
+            ReconcileComponentDependencies(notes)
+            _hint = DescribeNotes(notes)
+            RefreshComponentPage()
+        end
     elseif (btnName == "closebtn") then
         if (installx.DuiTabSelect("installlayout") > 0) then
-            installx.DuiTabSelect("installlayout", 0)
-            installx.DuiVisible("custombtn", true)
-            installx.DuiText("titletext", _strResource.SETUP)
-            installx.DuiTextColor("titletext", 0xFFFFFFFF)
-            installx.DuiSetBkImage("mainlayout", "res='" .. RES.BACKGROUND .. "' restype='png' source='0,0,600,221' corner='300,208,5,5'")
+            ShowMainPage()
         else
             installx.DuiMessage(0x10, 0, 0) -- WM_CLOSE
         end
+    elseif (btnName == "compbtn") then
+        ShowComponentPage()
+    elseif (btnName == "compokbtn") then
+        ShowMainPage()
     elseif (btnName == "lookprotbtn") then
         if (installx.DuiVisible("customlayout")) then
             CustomLayeroutHide()
@@ -113,34 +600,46 @@ end
 function OnSelChanged(btnName, isSelected)
     if (btnName == "protcheckbtn") then
         installx.DuiEnable("starinstallbtn", isSelected)
+        return
     end
+    local groupId = btnName:match("^grp_(%w+)$")
+    local groupOfItem, itemId = btnName:match("^item_(%w+)_(%w+)$")
+    if groupId == nil and groupOfItem == nil then
+        return
+    end
+    -- The option has already flipped itself; the page is redrawn from the selection either way.
+    -- Once the user picks components, a bad /components argument no longer matters.
+    if _argError then
+        _argError = nil
+        installx.DuiVisible("errortiplab", false)
+    end
+    local notes = NewNotes()
+    if groupId then
+        SelectComponentGroup(groupId, notes)
+    else
+        SelectComponent(groupOfItem .. "." .. itemId, isSelected, notes)
+    end
+    _hint = DescribeNotes(notes)
+    RefreshComponentPage()
 end
 
 local _image_index = 0
 local _lastPercent = 0   -- prevents progress bar going backwards during parallel extraction
+local _unzipTotal = 0    -- unpacked bytes of the archives being extracted
+local _unzipDone = 0
 
--- Progress ranges based on actual 7z file sizes (Win32:163MB, WinPy313:1121MB, TaiJiDataSvc:29MB, total ~1312MB)
--- SOFT1 (Win32.7z,  163MB): 5%~16%  (11 points, ~12%)
--- SOFT2 (WinPy313.7z, 1121MB): 16%~90% (74 points, ~85%)
--- SOFT3 (TaiJiDataSvc.7z, 29MB): 90%~92% (2 points, ~3%)
-
+-- Extraction runs from 5% to 92%, by unpacked bytes over all selected archives: one message per
+-- archive entry, nCurrentSize being that entry's size.
 function OnUnzipProgress(nNotifyID, nTotalFileNum, nCurFileIndex, nTotalSize, nCurrentSize)
 	-- If this is the callback with completion values (-1), skip updating progress here
 	if nCurFileIndex == -1 or nTotalFileNum == -1 then
 		return
 	end
-
-	local percent
-
-	if nNotifyID == RES.SOFT1 then
-		percent = 5 + math.floor(11 * nCurFileIndex / nTotalFileNum)
-	elseif nNotifyID == RES.SOFT2 then
-		percent = 16 + math.floor(74 * nCurFileIndex / nTotalFileNum)
-	elseif nNotifyID == RES.SOFT3 then
-		percent = 90 + math.floor(2 * nCurFileIndex / nTotalFileNum)
-	else
+	_unzipDone = _unzipDone + (nCurrentSize or 0)
+	if _unzipTotal <= 0 then
 		return
 	end
+	local percent = 5 + math.floor(87 * math.min(_unzipDone, _unzipTotal) / _unzipTotal)
 	-- Clamp to avoid backwards steps when packages extract in parallel
 	if percent <= _lastPercent then return end
 	_lastPercent = percent
@@ -160,14 +659,15 @@ function OnUnzipProgress(nNotifyID, nTotalFileNum, nCurFileIndex, nTotalSize, nC
 end
 
 function CheckDiskSpace()
-    freeSystemSpace = installx.DiskFreeSpace("")
-    if (freeSystemSpace <= 10*1024*1024) then
+    local freeSystemSpace = installx.DiskFreeSpace("")
+    if (freeSystemSpace ~= nil and freeSystemSpace <= 10*1024*1024) then
         ErrorHint(_strResource.SPACE_NOT_ENOUGH)
         return false
     end
-    freeSpace = installx.DiskFreeSpace(_dirCompany) or 500 * 1024 * 1024
-    if (freeSpace < 500 * 1024 * 1024) then
-        ErrorHint(_strResource.SPACE_HINT)
+    -- An unknown free space (the drive cannot be queried) does not block the install.
+    local need, free = ComponentSpaceNeeded(), FreeSpaceAt(_dirCompany)
+    if (free ~= nil and free < need) then
+        ErrorHint(string.format(_strResource.SPACE_HINT, FormatSize(need), FormatSize(free)))
         return false
     end
     return true
@@ -178,22 +678,114 @@ function CustomLayeroutHide()
     installx.DuiWindowPos("_MainFrame", 0, 0, 600, 380)
 end
 
-function KillProcesses()
+----------------------------------------------------------------------------------------------------
+-- Services and processes of the components
 
-	installx.LogPrint("KillProcesses TaiJiOPCSim.exe ...")
-    installx.ProcessKill("TaiJiOPCSim.exe")
+local HOSTVM_SERVICE = "HostVM"
+-- Windows services the install_*.bat of a component registers, and the process to make sure of.
+-- python: the component's launchers that load python3.dll from the shared WinPy313 and so hold its
+-- files open; servicePython: the service process is one of them.
+local SERVICES = {
+    ["DataService.Svr"] = {name = "TaiJiDataSvc", install = "TaiJiDataSvc\\install_TaiJiDataSvc.bat"},
+    ["DataService.Client"] = {name = "TaiJiDataCollector", exe = "DataCollector.exe",
+                              install = "TaiJiDataClient\\install_TaijiDataCollector.bat",
+                              python = {"DataCollector.exe", "DataViewer.exe", "tsdbAdmin.exe"}, servicePython = true},
+    ["TaijiSim.PYSim"] = {name = "TaiJiOPCSim", exe = "taiji-opcsim-server.exe",
+                          install = "TaiJiPYSim\\install_taijiopcsim.bat", python = {"pySim.exe"}},
+}
 
-	installx.LogPrint("KillProcesses TaiJiMPC.exe ...")
-    installx.ProcessKill("TaiJiMPC.exe")
+local _restartHostVM = false  -- HostVM was stopped only because files it loads are upgraded
+local _restartServices = {}   -- the same for component services that use WinPy313
 
-	installx.ProcessExecute("\"" .. _dirCompany .. "\\HostVM\\HostVM.exe\" --stop HostVM")
-	installx.ProcessExecute("\"" .. _dirCompany .. "\\HostVM\\HostVM.exe\" service stop HostVM")
-	installx.ProcessExecute("\"" .. _dirCompany .. "\\HostVM\\HostVM.exe\" --uninstall HostVM")
-	installx.ProcessExecute("\"" .. _dirCompany .. "\\HostVM\\HostVM.exe\" service remove HostVM")
+local function ServiceExists(name)
+    return installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\" .. name, "") ~= nil
+end
 
-	installx.LogPrint("KillProcesses HostVM.exe ...")
-    installx.ProcessKill("HostVM.exe")
+-- Whether a service is running (or on its way there). A pause for an upgrade of files it loads
+-- restores exactly this: a service an administrator stopped stays stopped.
+local function ServiceRunning(name)
+    local state = installx.ServiceState(name)
+    return state == "running" or state == "start_pending" or state == "continue_pending"
+end
 
+local function HostVM(args)
+    installx.ProcessExecute("\"" .. _dirCompany .. "\\HostVM\\HostVM.exe\" " .. args)
+end
+
+-- Stops what holds files of the selected components open. Nothing of a component that is not
+-- selected is stopped, except what loads the WinPy313 or identification files being replaced:
+-- HostVM, and the data collector's and pySim's Python launchers. PostSetup starts the services
+-- among them again.
+function StopSelectedComponents()
+    _restartHostVM = false
+    _restartServices = {}
+    if ComponentSelected("TaijiSim.OPCSim") then
+        installx.LogPrint("KillProcesses TaiJiOPCSim.exe ...")
+        installx.ProcessKill("TaiJiOPCSim.exe")
+    end
+    if ComponentSelected("TaijiMPC.TaijiMPC6") then
+        installx.LogPrint("KillProcesses TaiJiMPC.exe ...")
+        installx.ProcessKill("TaiJiMPC.exe")
+    end
+
+    local hostvmFilesChange = ComponentSelected("Common.WinPy313") or ComponentSelected("Common.Ident")
+    if ComponentSelected("TaijiMPC.HostVM") then
+        HostVM("--stop HostVM")
+        HostVM("service stop HostVM")
+        HostVM("--uninstall HostVM")
+        HostVM("service remove HostVM")
+        installx.LogPrint("KillProcesses HostVM.exe ...")
+        installx.ProcessKill("HostVM.exe")
+    elseif hostvmFilesChange and _installed["TaijiMPC.HostVM"] then
+        -- Read before stopping: only a HostVM that was running is started again.
+        _restartHostVM = ServiceRunning(HOSTVM_SERVICE)
+        HostVM("--stop HostVM")
+        HostVM("service stop HostVM")
+        installx.ProcessKill("HostVM.exe")
+    end
+    if ComponentSelected("Common.Ident") then
+        installx.ProcessKill("TaijiIdent32.exe")
+    end
+
+    local pythonChanges = ComponentSelected("Common.WinPy313")
+    for _, item in ipairs(_order) do
+        local service = SERVICES[item.key]
+        if service then
+            local selected = ComponentSelected(item.key)
+            -- Installed and not upgraded, but its Python launchers hold the WinPy313 being replaced.
+            local paused = not selected and pythonChanges and _installed[item.key] and service.python ~= nil
+            -- A paused service is stopped, and started again later, only if it was running.
+            local stop = selected and ServiceExists(service.name)
+            if paused and service.servicePython and ServiceRunning(service.name) then
+                stop = true
+                _restartServices[item.key] = true
+            end
+            if stop then
+                installx.LogPrint("Stop service " .. service.name .. " ...")
+                installx.ProcessExecute("net.exe stop " .. service.name, true, 60)
+                if service.exe then installx.ProcessKill(service.exe) end
+            end
+            if selected or paused then
+                for _, exe in ipairs(service.python or {}) do
+                    installx.ProcessKill(exe)
+                end
+            end
+        end
+    end
+end
+
+-- A selected component's service: registered by its install_*.bat on a fresh install, started
+-- again on an upgrade (the scripts refuse to register a service that exists).
+local function SetupComponentService(key, waitSec)
+    local service = SERVICES[key]
+    if not ComponentSelected(key) then
+        return
+    end
+    if ServiceExists(service.name) then
+        installx.ProcessExecute("net.exe start " .. service.name, true, waitSec)
+    else
+        RunBatchFile(_dirCompany .. "\\" .. service.install, waitSec)
+    end
 end
 
 function StartSetup()
@@ -201,10 +793,27 @@ function StartSetup()
 	installx.LogPrint("Require Admin Promote ...")
     isAdmin = installx.RunAsAdmin()
 
-    KillProcesses()
+    local function fail(message)
+        ErrorHint(message)
+        -- A silent install has nobody to correct the selection and would wait forever.
+        if installx.SysGetArg("s") then installx.SetupFailed(message) end
+    end
+    if _argError then
+        return fail(_argError)
+    end
+    -- The page keeps the selection consistent; this also covers any path the page did not see.
+    ReconcileComponentDependencies()
+    local plan, optional = ComponentPlan(), 0
+    for _, item in ipairs(plan) do
+        if not item.required then optional = optional + 1 end
+    end
+    if optional == 0 then
+        return fail(_strResource.NOTHING_SELECTED)
+    end
 
 	installx.LogPrint("CheckDiskSpace ...")
-    if ( not CheckDiskSpace() ) then 
+    if ( not CheckDiskSpace() ) then
+        if installx.SysGetArg("s") then installx.SetupFailed("not enough disk space") end
         return
     end
 
@@ -212,11 +821,15 @@ function StartSetup()
 	if not installx.FilePathExists(_dirCompany) then
 		installx.LogPrint("Makedir " .. _dirCompany .. " ...")
 		if (not installx.FilePathMkdir(_dirCompany)) then
-			ErrorHint(_strResource.MKDIR_FAILED .. _dirCompany)
-			return
+			return fail(_strResource.MKDIR_FAILED .. _dirCompany)
 		end
 	end
 
+    StopSelectedComponents()
+
+    if installx.DuiTabSelect("installlayout") > 0 then
+        ShowMainPage()
+    end
     CustomLayeroutHide()
     installx.DuiVisible("custombtn", false)
     installx.DuiVisible("errortiplab", false)
@@ -226,22 +839,19 @@ function StartSetup()
     installx.DuiVisible("sureportlayout", false)
     installx.DuiVisible("installprogress", true)
 
-	local _dirTaiJiDataSvc = _dirCompany .. "\\TaiJiDataSvc"
-	_installTaiJiDataSvc = not installx.FilePathExists(_dirTaiJiDataSvc)
-
-	local resourceIDs = {RES.SOFT1, RES.SOFT2}
-	local skipPrefixes = nil
-	if _installTaiJiDataSvc then
-		installx.LogPrint("Include Resource ID " .. RES.SOFT3 .. " (TaiJiDataSvc.7z)...")
-		table.insert(resourceIDs, RES.SOFT3)
-	else
-		skipPrefixes = {"TaiJiDataSvc"}
-		installx.LogPrint("Skip TaiJiDataSvc.7z, directory already exists: " .. _dirTaiJiDataSvc)
-		installx.LogPrint("Skip TaiJiDataSvc entries from bundled archives as well")
+	local resourceIDs = {}
+	_unzipTotal, _unzipDone, _lastPercent = 0, 0, 0
+	for _, item in ipairs(plan) do
+		installx.LogPrint("Install component " .. item.key .. " (resource " .. item.res .. ", " .. FormatSize(item.info.size) .. ")")
+		table.insert(resourceIDs, item.res)
+		_unzipTotal = _unzipTotal + item.info.size
 	end
-
-	installx.LogPrint("Unzip selected resources in one pass...")
-	installx.FilePathUnzip(resourceIDs, _dirCompany, skipPrefixes)
+	for _, item in ipairs(_order) do
+		if item.info and not _selected[item.key] then
+			installx.LogPrint("Skip component " .. item.key .. (_installed[item.key] and " (installed, kept as is)" or ""))
+		end
+	end
+	installx.FilePathUnzip(resourceIDs, _dirCompany)
 end
 
 -- The package ships HostVM\hostvm.default.xml but never hostvm.xml: once hostvm.xml exists it belongs
@@ -460,14 +1070,19 @@ local function OpcEnumUsable()
     return ComServerFileExists(view, RegDefault(view .. "CLSID\\" .. OPC_CLSID_OPCSERVERLIST .. "\\LocalServer32"))
 end
 
-function InstallOpcCoreComponents()
+-- wantX86 / wantX64: whether the selected components need that half; nil means yes.
+function InstallOpcCoreComponents(wantX86, wantX64)
     local opcDir = _dirCompany .. "\\Common\\opc\\"
-    if OpcProxiesUsable("WOW6432Node\\") and OpcEnumUsable() then
+    if wantX86 == false then
+        installx.LogPrint("Skip OPC core components x86, no selected component needs them")
+    elseif OpcProxiesUsable("WOW6432Node\\") and OpcEnumUsable() then
         installx.LogPrint("Skip OPC core components x86, already registered")
     else
         installx.ProcessExecute("\"" .. opcDir .. "GBDA_Install_Prereq_x86.msi\" /quiet")
     end
-    if OpcProxiesUsable("") then
+    if wantX64 == false then
+        installx.LogPrint("Skip OPC core components x64, no selected component needs them")
+    elseif OpcProxiesUsable("") then
         installx.LogPrint("Skip OPC core components x64, already registered")
     else
         installx.ProcessExecute("\"" .. opcDir .. "GBDA_Install_Prereq_x64.msi\" /quiet")
@@ -551,89 +1166,144 @@ function InstallHaspRuntime()
     installx.ProcessExecute("\"" .. _dirCompany .. "\\Common\\hasp\\haspdinst.exe\" -install -nomsg")
 end
 
+local function Progress(percent)
+	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
+end
+
+local function SetBothViews(path, name, value)
+    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\" .. path, name, value)
+    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\WOW6432Node\\" .. path, name, value)
+end
+
+-- PythonEnv names the WinPy313 python that HostVM's tools and the .py launchers of the data
+-- collector and pySim load python3.dll from.
+function WritePythonEnv()
+    if not ComponentPresent("Common.WinPy313") then
+        return
+    end
+    local pythonDir = _dirCompany .. "\\WinPy313\\python"
+    SetBothViews("TaijiControl\\PythonEnv", "InstallPath", pythonDir)
+    SetBothViews("TaijiControl\\PythonEnv", "PythonPath", pythonDir)
+    SetBothViews("TaijiControl\\PythonEnv", "Version", "3.13")
+end
+
 -- Returning false tells the installer that setup did not complete: it shows the failure and
--- enables the close button instead of moving on to the finish page.
+-- enables the close button instead of moving on to the finish page. Every step belongs to a
+-- selected component; nothing of a component that was not selected is touched.
 function PostSetup()
+
+    local hostvm = ComponentSelected("TaijiMPC.HostVM")
+    local client = ComponentSelected("TaijiMPC.TaijiMPC6")
+    local winpy = ComponentSelected("Common.WinPy313")
 
     -- Without hostvm.xml the HostVM service cannot start. Checking it first means a failure stops
     -- before any runtime, service, registry or shortcut is touched.
-    if not InstallHostVMConfig() or not InstallHostVMFragments() then
+    if hostvm and (not InstallHostVMConfig() or not InstallHostVMFragments()) then
         return false
     end
     -- Likewise for the client, which cannot start without ICU.
-    if not InstallIcuFallback() then
+    if client and not InstallIcuFallback() then
         return false
     end
 
-	local percent = 94
-	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
+	Progress(94)
     local vcRedist = installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64", "Installed")
     if (vcRedist == nil or vcRedist == 0) then
         installx.ProcessExecute("\"" .. _dirCompany .. "\\Common\\vcredist\\vc_redist.x64.exe\" /install /quiet /norestart", true, 60)
     end
 
-	local percent = 95
-	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
-    InstallOpcCoreComponents()
+	Progress(95)
+    -- x86: the 32-bit DA servers, and OpcEnum, which HostVM's libidh also activates to browse the
+    -- local DA servers; x64: HostVM's DA client.
+    InstallOpcCoreComponents(ComponentSelected("TaijiSim.OPCSim") or ComponentSelected("TaijiSim.PYSim") or hostvm, hostvm)
 
-	local percent = 96
-	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
+	Progress(96)
+    if ComponentSelected("TaijiSim.OPCSim") then
+        RegisterTaiJiOPCSim()
+    end
+    -- The Envelope-protected tjonlinelib DLLs of the identification worker need the run-time.
+    if ComponentSelected("Common.Ident") then
+        InstallHaspRuntime()
+    end
 
-    RegisterTaiJiOPCSim()
+    -- Registry before the services and scripts below: install_python_env.bat reads InstallPath,
+    -- and the data collector and pySim find python3.dll through PythonEnv when they start.
+    SetBothViews("TaijiControl", "InstallPath", _dirCompany)
+    SetBothViews("TaijiControl\\TaiJiMPC6", "Version", _VERSION)
+    if ComponentPresent("TaijiMPC.TaijiMPC6") then
+        SetBothViews("TaijiControl\\TaiJiMPC6", "APPPath", _dirExeFullPath)
+    end
+    WritePythonEnv()
+    for _, item in ipairs(_order) do
+        if _selected[item.key] then
+            installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, COMPONENTS_KEY, item.key, _VERSION)
+        end
+    end
 
-    InstallHaspRuntime()
+    if hostvm or winpy then
+        RunBatchFile(_dirCompany .. "\\HostVM\\install_python_env.bat", 10)
+        -- The script still writes WinPy312 into PythonEnv; put WinPy313 back.
+        WritePythonEnv()
+    end
+    SetupComponentService("DataService.Svr", 30)
+    SetupComponentService("DataService.Client", 30)
+    SetupComponentService("TaijiSim.PYSim", 30)
+    for _, item in ipairs(_order) do
+        if _restartServices[item.key] then
+            installx.ProcessExecute("net.exe start " .. SERVICES[item.key].name, true, 30)
+        end
+    end
 
-	RunBatchFile(_dirCompany .. "\\HostVM\\install_python_env.bat", 10)
-	if _installTaiJiDataSvc then
-		RunBatchFile(_dirCompany .. "\\TaiJiDataSvc\\install_TaiJiDataSvc.bat", 30)
-	else
-		installx.LogPrint("Skip install_TaiJiDataSvc.bat, TaiJiDataSvc already exists")
-	end
-	RunBatchFile(_dirCompany .. "\\TaiJiDataClient\\install_TaiJiDataClient.bat", 30)
-	RunBatchFile(_dirCompany .. "\\TaijiPYSim\\install_taijiopcsim.bat", 30)
+	Progress(97)
+    if client then
+        local desktopDir = installx.FilePathGetSpecialLocation(CSIDL.COMMON_DESKTOPDIRECTORY)
+        installx.FilePathCreateShortCut(desktopDir .. "\\TaiJiMPC6.lnk", _dirExeFullPath, _dirExeHomeDir, "TaiJiMPC6")
 
-	local percent = 97
-	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
+        local startMenuDir = installx.FilePathGetSpecialLocation(CSIDL.COMMON_STARTMENU)
+        installx.FilePathMkdir(startMenuDir .. "\\Programs\\TaijiControl")
+        installx.FilePathCreateShortCut(startMenuDir .. "\\Programs\\TaijiControl\\TaiJiMPC6.lnk", _dirExeFullPath, _dirExeHomeDir, "TaiJiMPC6")
+    end
 
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\TaijiControl", "InstallPath", _dirCompany)
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\TaijiControl\\TaiJiMPC6", "APPPath", _dirExeFullPath)
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\TaijiControl\\TaiJiMPC6", "Version", _VERSION)
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\TaijiControl\\PythonEnv", "InstallPath", _dirCompany .. "\\WinPy313\\python")
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\TaijiControl\\PythonEnv", "Version", "3.13")
+	Progress(98)
+    if hostvm then
+        HostVM("service install HostVM")
+        HostVM("service start HostVM")
+    elseif _restartHostVM then
+        HostVM("service start HostVM")
+    end
 
-	installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\WOW6432Node\\TaijiControl", "InstallPath", _dirCompany)
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\WOW6432Node\\TaijiControl\\TaiJiMPC6", "APPPath", _dirExeFullPath)
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\WOW6432Node\\TaijiControl\\TaiJiMPC6", "Version", _VERSION)
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\WOW6432Node\\TaijiControl\\PythonEnv", "InstallPath", _dirCompany .. "\\WinPy313\\python")
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\WOW6432Node\\TaijiControl\\PythonEnv", "Version", "3.13")
+	Progress(99)
 
-    local desktopDir = installx.FilePathGetSpecialLocation(CSIDL.COMMON_DESKTOPDIRECTORY)
-    installx.FilePathCreateShortCut(desktopDir .. "\\TaiJiMPC6.lnk", _dirExeFullPath, _dirExeHomeDir, "TaiJiMPC6")
-
-    local startMenuDir = installx.FilePathGetSpecialLocation(CSIDL.COMMON_STARTMENU)
-    installx.FilePathMkdir(startMenuDir .. "\\Programs\\TaijiControl")
-    installx.FilePathCreateShortCut(startMenuDir .. "\\Programs\\TaijiControl\\TaiJiMPC6.lnk", _dirExeFullPath, _dirExeHomeDir, "TaiJiMPC6")
-
-	local percent = 98
-	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
-    installx.ProcessExecute("\"" .. _dirCompany .. "\\HostVM\\HostVM.exe\" service install HostVM")
-    installx.ProcessExecute("\"" .. _dirCompany .. "\\HostVM\\HostVM.exe\" service start HostVM")
-
-	local percent = 99
-	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
-
+    -- Common.7z (always installed) carries the uninstaller, so every combination of components
+    -- can be uninstalled. Earlier packages put it into TaiJiMPC6\, where it is now stale.
+    local uninstaller = _dirCompany .. "\\Uninstall\\UnInstall.exe"
+    local staleUninstaller = _dirExeHomeDir .. "\\UnInstall.exe"
+    if installx.FilePathExists(uninstaller) and installx.FilePathExists(staleUninstaller) then
+        installx.FilePathDelete(staleUninstaller)
+    end
     -- The first RegSetValue below creates the TaiJiMPC6 key.
     local UNINST_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TaiJiMPC6"
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, UNINST_KEY, "DisplayIcon", _dirExeFullPath)
+    local icon = ComponentPresent("TaijiMPC.TaijiMPC6") and _dirExeFullPath or uninstaller
+    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, UNINST_KEY, "DisplayIcon", icon)
     installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, UNINST_KEY, "DisplayName", "Tai-Ji MPC6")
     installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, UNINST_KEY, "DisplayVersion", _VERSION)
     installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, UNINST_KEY, "Publisher", "Tai-Ji Soft")
-    -- build_TaijiMPC6.py puts UnInstall.exe into TaijiMPC6\ of Win32.7z.
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, UNINST_KEY, "UninstallString", _dirExeHomeDir .. "\\UnInstall.exe")
+    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, UNINST_KEY, "UninstallString", uninstaller)
 
-	local percent = 100
-	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
+    -- The finish page only offers what was installed.
+    if not ComponentPresent("TaijiMPC.TaijiMPC6") then
+        for _, option in ipairs({"runbtn", "bootstartbtn"}) do
+            installx.DuiOptionSelect(option, false, false)
+            installx.DuiVisible(option, false)
+        end
+    end
+    if not ComponentPresent("Common.WinPy313") then
+        installx.DuiOptionSelect("pyenvbtn", false, false)
+        installx.DuiVisible("pyenvbtn", false)
+    end
 
+	Progress(100)
+    return true
 end
 
 function _FinishInstall()

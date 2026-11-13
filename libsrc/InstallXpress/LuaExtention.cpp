@@ -17,8 +17,10 @@
 #endif
 #include <atlbase.h>
 
+#include <shellapi.h>
 #include "InstallXpress.h"
 #include "MainFrame.h"
+#include "UnZip7z.h"
 #include "Utility/log.h"
 
 #define DEBUG_LUAEXT
@@ -180,7 +182,11 @@ static int l_DuiOptionSelect(lua_State* L)
         return 1;
     }
     if (lua_isboolean(L, 2)) {
-        pOptionUI->Selected(lua_toboolean(L, 2));
+        // DuiOptionSelect(name, selected, false) changes the option without sending
+        // selectchanged, so a script that syncs related options from OnSelChanged is not
+        // re-entered for every option it sets.
+        bool notify = !lua_isboolean(L, 3) || lua_toboolean(L, 3);
+        pOptionUI->Selected(lua_toboolean(L, 2) != 0, notify);
         lua_pushboolean(L, true);
         return 1;
     }
@@ -188,6 +194,26 @@ static int l_DuiOptionSelect(lua_State* L)
         lua_pushboolean(L, pOptionUI->IsSelected());
         return 1;
     }
+}
+
+// DuiAttribute(name, attribute, value): sets any skin XML attribute of a control at run time,
+// e.g. an option's foreimage. Returns false when the control does not exist.
+extern "C"
+static int l_DuiAttribute(lua_State* L)
+{
+    const char* ctrlName = luaL_checkstring(L, 1);
+    const char* attrName = luaL_checkstring(L, 2);
+    const char* attrValue = luaL_checkstring(L, 3);
+    DuiLib::CControlUI* pControl =
+        _pPaintManager == 0 ? 0 : _pPaintManager->FindControl(Utf82Unicode(ctrlName).c_str());
+    if (pControl == 0) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    pControl->SetAttribute(Utf82Unicode(attrName).c_str(), Utf82Unicode(attrValue).c_str());
+    pControl->Invalidate();
+    lua_pushboolean(L, true);
+    return 1;
 }
 
 extern "C"
@@ -1163,6 +1189,114 @@ static int l_SysACP(lua_State * L)
     return 1;
 }
 
+// SysGetArg(name): the installer's command-line argument /name=value (also -name=value or
+// --name=value; the name is case-insensitive). Returns the value, true for a bare /name, or nil
+// when the argument is absent. RunAsAdmin passes the arguments on to the elevated process.
+extern "C"
+static int l_SysGetArg(lua_State* L)
+{
+    std::wstring wanted = Utf82Unicode(luaL_checkstring(L, 1));
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    if (!argv || wanted.empty()) {
+        if (argv) LocalFree(argv);
+        lua_pushnil(L);
+        return 1;
+    }
+    bool found = false;
+    for (int i = 1; i < argc && !found; ++i) {
+        std::wstring arg = argv[i];
+        size_t start = 0;
+        if (arg.compare(0, 2, L"--") == 0) start = 2;
+        else if (!arg.empty() && (arg[0] == L'/' || arg[0] == L'-')) start = 1;
+        else continue;
+        size_t equals = arg.find(L'=', start);
+        std::wstring name = arg.substr(start, equals == std::wstring::npos ? std::wstring::npos : equals - start);
+        if (_wcsicmp(name.c_str(), wanted.c_str()) != 0) continue;
+        if (equals == std::wstring::npos)
+            lua_pushboolean(L, true);
+        else {
+            std::string value = UnicodeToUtf8(arg.substr(equals + 1));
+            lua_pushlstring(L, value.data(), value.size());
+        }
+        found = true;
+    }
+    LocalFree(argv);
+    if (!found) lua_pushnil(L);
+    return 1;
+}
+
+// ServiceState(name): the current state of a Windows service, as "running", "stopped",
+// "start_pending", "stop_pending", "continue_pending", "pause_pending" or "paused"; nil when no
+// service has that name or it cannot be queried.
+extern "C"
+static int l_ServiceState(lua_State* L)
+{
+    std::wstring name = Utf82Unicode(luaL_checkstring(L, 1));
+    const char* state = nullptr;
+    SC_HANDLE manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    if (manager != NULL) {
+        SC_HANDLE service = OpenServiceW(manager, name.c_str(), SERVICE_QUERY_STATUS);
+        if (service != NULL) {
+            SERVICE_STATUS_PROCESS status{};
+            DWORD needed = 0;
+            if (QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, (LPBYTE)&status, sizeof(status), &needed)) {
+                switch (status.dwCurrentState) {
+                case SERVICE_RUNNING: state = "running"; break;
+                case SERVICE_STOPPED: state = "stopped"; break;
+                case SERVICE_START_PENDING: state = "start_pending"; break;
+                case SERVICE_STOP_PENDING: state = "stop_pending"; break;
+                case SERVICE_CONTINUE_PENDING: state = "continue_pending"; break;
+                case SERVICE_PAUSE_PENDING: state = "pause_pending"; break;
+                case SERVICE_PAUSED: state = "paused"; break;
+                }
+            }
+            CloseServiceHandle(service);
+        }
+        CloseServiceHandle(manager);
+    }
+    if (state != nullptr) lua_pushstring(L, state);
+    else lua_pushnil(L);
+    return 1;
+}
+
+// SetupFailed(reason): setup cannot start or go on. Records the failure for the exit code,
+// enables the close button and, in a silent install (/s), closes the installer, which would
+// otherwise wait for an extraction that never starts.
+extern "C"
+static int l_SetupFailed(lua_State* L)
+{
+    const char* reason = luaL_optstring(L, 1, "in the setup script");
+    CMainFrame* frame = CMainFrame::GetInstance();
+    if (frame != nullptr) frame->OnInstallFailed(reason);
+    lua_pushboolean(L, frame != nullptr);
+    return 1;
+}
+
+// PackageInfo(resourceID): nil when the installer has no INSTALLSOFT resource with that ID,
+// otherwise {size = unpacked bytes, entries = files and directories}, read from the 7z header
+// only. Lets a script show sizes, check disk space and hide components a build left out.
+extern "C"
+static int l_PackageInfo(lua_State* L)
+{
+    UINT resourceID = (UINT)luaL_checkinteger(L, 1);
+    CMainFrame* frame = CMainFrame::GetInstance();
+    ResourceHandler* resource = frame == nullptr ? nullptr : frame->LoadResourceFile(resourceID, _T("INSTALLSOFT"));
+    unsigned long long size = 0;
+    unsigned entries = 0;
+    CUnZip7z unzip;
+    if (resource == nullptr || !unzip.get_package_info(resource, size, entries)) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_createtable(L, 0, 2);
+    lua_pushinteger(L, (lua_Integer)size);
+    lua_setfield(L, -2, "size");
+    lua_pushinteger(L, (lua_Integer)entries);
+    lua_setfield(L, -2, "entries");
+    return 1;
+}
+
 
 static bool SetSysEnvironmentVariable(const wchar_t* name, const wchar_t* value) {
     HKEY hKey;
@@ -1436,6 +1570,7 @@ end
 
 static const luaL_Reg reglib[] = {
     {"DiskFreeSpace", l_DiskFreeSpace},
+    {"DuiAttribute", l_DuiAttribute},
     {"DuiEnable", l_DuiEnable},
     {"DuiMessage", l_DuiMessage},
     {"DuiOptionSelect", l_DuiOptionSelect},
@@ -1459,6 +1594,7 @@ static const luaL_Reg reglib[] = {
     {"FilePathMkdir", l_FilePathMakeDir},
     {"FilePathSaveResource", l_FilePathSaveResource},
     {"FilePathUnzip", l_FilePathUnzipAsync},
+    {"PackageInfo", l_PackageInfo},
 
     {"LogPrint", l_LogPrint},
 
@@ -1466,6 +1602,8 @@ static const luaL_Reg reglib[] = {
     {"ProcessKill", l_ProcessKill},
 
     {"RunAsAdmin", l_RunAsAdmin},
+    {"ServiceState", l_ServiceState},
+    {"SetupFailed", l_SetupFailed},
 
     {"RegGetValue", l_RegGetValue},
     {"RegGetDefaultValue", l_RegGetDefaultValue},
@@ -1476,6 +1614,7 @@ static const luaL_Reg reglib[] = {
     {"SysACP", l_SysACP},
     {"SysEnvSet", l_SysEnvSet},
     {"SysGetArch", l_SysGetArch},
+    {"SysGetArg", l_SysGetArg},
     {"SysGetInstalledSoftware", l_SysGetInstalledSoftware},
     {"SysIsWin10OrLater", l_SysIsWin10OrLater},
     {"SysNetworkAvailable", l_SysNetworkAvailable},

@@ -443,6 +443,35 @@ int CUnZip7z::getunzipfilenum(ResourceHandler* resHandler)
 	return nsize;
 }
 
+bool CUnZip7z::get_package_info(ResourceHandler* resHandler, unsigned long long& totalSize, unsigned& entryCount)
+{
+	totalSize = 0;
+	entryCount = 0;
+	if (resHandler == NULL || resHandler->GetData() == NULL)
+		return false;
+
+	CSzArEx db;
+	ISzAlloc allocImp;
+	ISzAlloc allocTempImp;
+	CMem7zLookInStream lookIn{ 0 };
+	InitMem7zLookInStream(&lookIn, (const BYTE*)resHandler->GetData(), resHandler->GetSize());
+
+	allocImp.Alloc = SzAlloc;
+	allocImp.Free = SzFree;
+	allocTempImp.Alloc = SzAllocTemp;
+	allocTempImp.Free = SzFreeTemp;
+
+	CrcGenerateTable();
+	SzArEx_Init(&db);
+	SRes res = SzArEx_Open(&db, &lookIn.vtbl, &allocImp, &allocTempImp);
+	if (res == SZ_OK) {
+		totalSize = GetTotalSize(&db);
+		entryCount = db.NumFiles;
+	}
+	SzArEx_Free(&db, &allocImp);
+	return res == SZ_OK;
+}
+
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 
 int CUnZip7z::unzip_7z_file(ResourceHandler* resHandler, const std::wstring &mUnPackPath, HWND callback, UINT Msg, UINT nNotifyID, const std::vector<std::wstring>& skipPrefixes)
