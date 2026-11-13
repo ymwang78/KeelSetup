@@ -33,6 +33,7 @@ local _strResourceCN = {
 	KEPT = "已安装，保留现有数据，不会重新安装",
 	NOTHING_SELECTED = "请至少选择一个组件",
 	UNKNOWN_COMPONENT = "未知组件: ",
+	UNAVAILABLE_COMPONENT = "本安装包无法安装的组件: ",
 	HINT_ADDED = "已同时选择 %s（%s 需要）",
 	HINT_REMOVED = "已同时取消 %s（它需要 %s）",
 	HINT_MISSING = "无法选择 %s：安装包不含 %s",
@@ -59,6 +60,7 @@ local _strResourceEN = {
 	KEPT = "Installed; the existing data is kept and it is not reinstalled",
 	NOTHING_SELECTED = "Select at least one component",
 	UNKNOWN_COMPONENT = "Unknown component: ",
+	UNAVAILABLE_COMPONENT = "Components this installer cannot install: ",
 	HINT_ADDED = "Also selected %s (needed by %s)",
 	HINT_REMOVED = "Also deselected %s (it needs %s)",
 	HINT_MISSING = "Cannot select %s: this installer lacks %s",
@@ -113,7 +115,9 @@ local COMPONENTS = {
         { id = "Svr", res = 170, marker = "TaiJiDataSvc", keepIfInstalled = true,
           name = {"数据服务 Svr", "Data server"},
           desc = {"TaiJiDataSvc 数据库服务（PostgreSQL）", "TaiJiDataSvc database service (PostgreSQL)"} },
-        { id = "Client", res = 171, marker = "TaiJiDataClient\\DataCollector.exe",
+        -- DataCollector.exe (like DataViewer.exe and tsdbAdmin.exe) only launches its .py: it loads
+        -- python3.dll from Software\TaijiControl\PythonEnv and calls Py_Main.
+        { id = "Client", res = 171, marker = "TaiJiDataClient\\DataCollector.exe", deps = {"Common.WinPy313"},
           name = {"数据采集 Client", "Data collector"},
           desc = {"TaiJiDataCollector 采集服务", "TaiJiDataCollector service"} },
     }},
@@ -121,7 +125,9 @@ local COMPONENTS = {
         { id = "OPCSim", res = 180, marker = "TaiJiOPCSim\\bin\\TaiJiOPCSim.exe",
           name = {"OPC 仿真 OPCSim", "OPC simulator"},
           desc = {"TaiJiOPCSim，32 位 OPC DA 仿真服务器", "TaiJiOPCSim, a 32-bit OPC DA simulation server"} },
-        { id = "PYSim", res = 181, marker = "TaiJiPYSim\\opcserver_win_i386\\taiji-opcsim-server.exe",
+        -- The OPC server taiji-opcsim-server.exe is self-contained, but pySim.exe, which runs the
+        -- simulation model, is a pySim.py launcher like DataCollector.exe.
+        { id = "PYSim", res = 181, marker = "TaiJiPYSim\\opcserver_win_i386\\taiji-opcsim-server.exe", deps = {"Common.WinPy313"},
           name = {"Python 仿真 PYSim", "Python simulator"},
           desc = {"TaiJiPYSim 仿真服务", "TaiJiPYSim simulation service"} },
     }},
@@ -292,25 +298,57 @@ function SelectComponentGroup(groupId, notes)
 end
 
 -- /components=<names>: exactly the named groups and items (and what they need) besides the
--- required ones. Returns the names it does not know.
+-- required ones. Returns the names it does not know, and the requested items it cannot install
+-- (no archive in this installer, or a dependency that is neither installed nor in it). An
+-- installed item counts as satisfied even when it is not selected: it stays as it is, as a
+-- kept TaiJiDataSvc does.
 function ApplyComponentArg(text)
     _selected = {}
     for _, item in ipairs(_order) do
         if item.info and LockedState(item) == true then _selected[item.key] = true end
     end
-    local unknown = {}
+    local unknown, unavailable = {}, {}
     for token in tostring(text):gmatch("[^,;%s]+") do
         local wanted = token:lower()
         local found = false
         for _, item in ipairs(_order) do
             if item.group.id:lower() == wanted or item.key:lower() == wanted then
                 found = true
-                SelectComponent(item.key, true)
+                if not SelectComponent(item.key, true) and not _installed[item.key] then
+                    table.insert(unavailable, item.key)
+                end
             end
         end
         if not found then table.insert(unknown, token) end
     end
-    return unknown
+    return unknown, unavailable
+end
+
+-- Selects the missing dependencies of every selected item again, or deselects an item whose
+-- dependency cannot be had. Needed after the install path changes: a dependency that was
+-- installed at the old path (so not selected) may be missing at the new one.
+function ReconcileComponentDependencies(notes)
+    local changed = true
+    while changed do
+        changed = false
+        for _, item in ipairs(_order) do
+            if _selected[item.key] and LockedState(item) == nil then
+                for _, dep in ipairs(item.deps or {}) do
+                    if not _selected[dep] and not _installed[dep] then
+                        changed = true
+                        local depItem = _items[dep]
+                        if depItem and depItem.info and SelectComponent(dep, true, notes) then
+                            if notes then table.insert(notes.added, {dep, item.key}) end
+                        else
+                            _selected[item.key] = nil
+                            if notes then table.insert(notes.missing, {item.key, dep}) end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+    end
 end
 
 function ComponentSelected(key)
@@ -379,7 +417,8 @@ local function DescribeNotes(notes)
         table.insert(parts, string.format(_strResource.HINT_REMOVED, L(_items[entry[1]].name), L(_items[entry[2]].name)))
     end
     for _, entry in ipairs(notes.missing) do
-        table.insert(parts, string.format(_strResource.HINT_MISSING, L(_items[entry[1]].name), entry[2]))
+        local dep = _items[entry[2]]
+        table.insert(parts, string.format(_strResource.HINT_MISSING, L(_items[entry[1]].name), dep and L(dep.name) or entry[2]))
     end
     if #parts == 0 then return nil end
     return table.concat(parts, _strResource.HINT_SEP)
@@ -487,10 +526,18 @@ function OnInitialize()
 	LoadComponents()
 	local arg = installx.SysGetArg("components")
 	if type(arg) == "string" then
-		local unknown = ApplyComponentArg(arg)
+		local unknown, unavailable = ApplyComponentArg(arg)
+		local problems = {}
 		if #unknown > 0 then
-			-- A silent install refuses to start; with the page the user can correct the selection.
-			_argError = _strResource.UNKNOWN_COMPONENT .. table.concat(unknown, ", ")
+			table.insert(problems, _strResource.UNKNOWN_COMPONENT .. table.concat(unknown, ", "))
+		end
+		if #unavailable > 0 then
+			table.insert(problems, _strResource.UNAVAILABLE_COMPONENT .. table.concat(unavailable, ", "))
+		end
+		if #problems > 0 then
+			-- A silent install refuses to start rather than report success without them; with
+			-- the page the user can correct the selection.
+			_argError = table.concat(problems, _strResource.HINT_SEP)
 			installx.LogPrint(_argError)
 			ErrorHint(_argError)
 		end
@@ -513,8 +560,11 @@ function OnButtonClick(btnName)
         if installPath ~= nil and installPath ~= "" then
             installx.DuiText("pathedit", installPath)
             ResetInstallPath(installPath)
-            -- Installed components, and so locks and space, belong to the install path.
+            -- Installed components, and so locks, dependencies and space, belong to the install path.
             RefreshInstalledComponents()
+            local notes = NewNotes()
+            ReconcileComponentDependencies(notes)
+            _hint = DescribeNotes(notes)
             RefreshComponentPage()
         end
     elseif (btnName == "closebtn") then
@@ -719,6 +769,8 @@ function StartSetup()
     if _argError then
         return fail(_argError)
     end
+    -- The page keeps the selection consistent; this also covers any path the page did not see.
+    ReconcileComponentDependencies()
     local plan, optional = ComponentPlan(), 0
     for _, item in ipairs(plan) do
         if not item.required then optional = optional + 1 end
@@ -1091,6 +1143,18 @@ local function SetBothViews(path, name, value)
     installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\WOW6432Node\\" .. path, name, value)
 end
 
+-- PythonEnv names the WinPy313 python that HostVM's tools and the .py launchers of the data
+-- collector and pySim load python3.dll from.
+function WritePythonEnv()
+    if not ComponentPresent("Common.WinPy313") then
+        return
+    end
+    local pythonDir = _dirCompany .. "\\WinPy313\\python"
+    SetBothViews("TaijiControl\\PythonEnv", "InstallPath", pythonDir)
+    SetBothViews("TaijiControl\\PythonEnv", "PythonPath", pythonDir)
+    SetBothViews("TaijiControl\\PythonEnv", "Version", "3.13")
+end
+
 -- Returning false tells the installer that setup did not complete: it shows the failure and
 -- enables the close button instead of moving on to the finish page. Every step belongs to a
 -- selected component; nothing of a component that was not selected is touched.
@@ -1117,8 +1181,9 @@ function PostSetup()
     end
 
 	Progress(95)
-    -- x86: the 32-bit DA servers and OpcEnum; x64: HostVM's DA client.
-    InstallOpcCoreComponents(ComponentSelected("TaijiSim.OPCSim") or ComponentSelected("TaijiSim.PYSim"), hostvm)
+    -- x86: the 32-bit DA servers, and OpcEnum, which HostVM's libidh also activates to browse the
+    -- local DA servers; x64: HostVM's DA client.
+    InstallOpcCoreComponents(ComponentSelected("TaijiSim.OPCSim") or ComponentSelected("TaijiSim.PYSim") or hostvm, hostvm)
 
 	Progress(96)
     if ComponentSelected("TaijiSim.OPCSim") then
@@ -1129,32 +1194,30 @@ function PostSetup()
         InstallHaspRuntime()
     end
 
-    if hostvm or winpy then
-        RunBatchFile(_dirCompany .. "\\HostVM\\install_python_env.bat", 10)
-    end
-    SetupComponentService("DataService.Svr", 30)
-    SetupComponentService("DataService.Client", 30)
-    SetupComponentService("TaijiSim.PYSim", 30)
-
-	Progress(97)
+    -- Registry before the services and scripts below: install_python_env.bat reads InstallPath,
+    -- and the data collector and pySim find python3.dll through PythonEnv when they start.
     SetBothViews("TaijiControl", "InstallPath", _dirCompany)
     SetBothViews("TaijiControl\\TaiJiMPC6", "Version", _VERSION)
     if ComponentPresent("TaijiMPC.TaijiMPC6") then
         SetBothViews("TaijiControl\\TaiJiMPC6", "APPPath", _dirExeFullPath)
     end
-    if ComponentPresent("Common.WinPy313") then
-        local pythonDir = _dirCompany .. "\\WinPy313\\python"
-        SetBothViews("TaijiControl\\PythonEnv", "InstallPath", pythonDir)
-        -- install_python_env.bat above still writes WinPy312 here.
-        SetBothViews("TaijiControl\\PythonEnv", "PythonPath", pythonDir)
-        SetBothViews("TaijiControl\\PythonEnv", "Version", "3.13")
-    end
+    WritePythonEnv()
     for _, item in ipairs(_order) do
         if _selected[item.key] then
             installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, COMPONENTS_KEY, item.key, _VERSION)
         end
     end
 
+    if hostvm or winpy then
+        RunBatchFile(_dirCompany .. "\\HostVM\\install_python_env.bat", 10)
+        -- The script still writes WinPy312 into PythonEnv; put WinPy313 back.
+        WritePythonEnv()
+    end
+    SetupComponentService("DataService.Svr", 30)
+    SetupComponentService("DataService.Client", 30)
+    SetupComponentService("TaijiSim.PYSim", 30)
+
+	Progress(97)
     if client then
         local desktopDir = installx.FilePathGetSpecialLocation(CSIDL.COMMON_DESKTOPDIRECTORY)
         installx.FilePathCreateShortCut(desktopDir .. "\\TaiJiMPC6.lnk", _dirExeFullPath, _dirExeHomeDir, "TaiJiMPC6")

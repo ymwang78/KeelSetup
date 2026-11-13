@@ -16,7 +16,7 @@ local MARKERS = {
 }
 local SYSTEM = "C:\\Windows\\System32"
 
-local installed, missing, args, files, registry, commands, ui, unzipped, failed, errors
+local installed, missing, args, files, registry, commands, ui, unzipped, failed, errors, chosenPath
 
 local function startsWith(text, prefix)
     return text:sub(1, #prefix):lower() == prefix:lower()
@@ -48,6 +48,7 @@ installx = {
         return values[name:lower()]
     end,
     RegSetValue = function(root, path, name, value)
+        table.insert(commands, "reg " .. path .. "|" .. name .. "=" .. tostring(value))
         registry[path:lower()] = registry[path:lower()] or {}
         registry[path:lower()][name:lower()] = value
         return true
@@ -87,6 +88,7 @@ installx = {
     ProcessExecute = function(command) table.insert(commands, "exec " .. command) return true end,
     ProcessKill = function(name) table.insert(commands, "kill " .. name) return true end,
     FilePathMkdir = function() return true end,
+    FilePathChoose = function() return chosenPath end,
     FilePathUnzip = function(resourceIDs, directory)
         assert(directory == ROOT, directory)
         unzipped = resourceIDs
@@ -156,14 +158,14 @@ check(ui.text["item_Common_WinPy313"]:find("925 MB", 1, true) ~= nil, "size in l
 local plan = ComponentPlan()
 check(#plan == 10 and plan[1].res == 152 and plan[2].res == 170 and plan[#plan].res == 171, "biggest first")
 
--- Deselecting the Common group keeps the required runtime and takes HostVM, which needs the
--- deselected Python and identification components, with it.
+-- Deselecting the Common group keeps the required runtime and takes what needs the deselected
+-- Python and identification components with it: HostVM, the data collector and PYSim.
 OnSelChanged("grp_Common", false)
-check(selection() == "Common.Runtime,TaijiMPC.TaijiMPC6,DataService.Svr,DataService.Client,TaijiSim.OPCSim,TaijiSim.PYSim,Tool.RUS",
+check(selection() == "Common.Runtime,TaijiMPC.TaijiMPC6,DataService.Svr,TaijiSim.OPCSim,Tool.RUS",
       "common off: " .. selection())
 check(ComponentGroupState("Common") == "partial" and ComponentGroupState("TaijiMPC") == "partial", "partial states")
 check(ui.selected["grp_Common"] == false and ui.attributes["grp_Common.foreimage"] ~= "", "partial checkbox drawn")
-check(ui.attributes["grp_DataService.foreimage"] == "", "full group has no partial mark")
+check(ui.attributes["grp_Tool.foreimage"] == "", "full group has no partial mark")
 check(ui.text["comphintlab"]:find("HostVM", 1, true) ~= nil, "hint names HostVM: " .. ui.text["comphintlab"])
 -- Selecting HostVM brings both dependencies back.
 OnSelChanged("item_TaijiMPC_HostVM", true)
@@ -173,7 +175,10 @@ check(ui.text["comphintlab"]:find("Python 3.13", 1, true) ~= nil, "hint names th
 -- The required runtime cannot be deselected.
 OnSelChanged("item_Common_Runtime", false)
 check(ComponentSelected("Common.Runtime") and ui.selected["item_Common_Runtime"] == true, "runtime stays")
--- A group click on a full group clears it, a second click fills it.
+-- A group click on a partial group fills it, on a full group clears it.
+check(ComponentGroupState("TaijiSim") == "partial", "PYSim left with Python")
+OnSelChanged("grp_TaijiSim", true)
+check(ComponentGroupState("TaijiSim") == "all", "partial group filled")
 OnSelChanged("grp_TaijiSim", false)
 check(not ComponentSelected("TaijiSim.OPCSim") and not ComponentSelected("TaijiSim.PYSim"), "group off")
 check(ui.selected["grp_TaijiSim"] == false and ui.attributes["grp_TaijiSim.foreimage"] == "", "empty group")
@@ -262,14 +267,75 @@ check(not hasCommand("install_TaiJiDataSvc.bat"), "data server untouched")
 check(hasCommand("delete " .. ROOT .. "\\TaiJiMPC6\\UnInstall.exe"), "stale uninstaller removed")
 
 -- Without the client the finish page offers neither starting it nor autostart, and Add/Remove
--- Programs shows the uninstaller's icon.
+-- Programs shows the uninstaller's icon. The data collector only launches DataCollector.py, so
+-- it brings WinPy313 along, and PythonEnv is written before its service starts.
 scenario({args = {components = "DataService"}})
 StartSetup()
-check(table.concat(unzipped, ",") == "170,150,171", "data service archives: " .. table.concat(unzipped, ","))
+check(table.concat(unzipped, ",") == "152,170,150,171", "data service archives: " .. table.concat(unzipped, ","))
+commands = {}
 check(PostSetup() == true, "post setup 3")
-check(ui.visible["runbtn"] == false and ui.selected["runbtn"] == false and ui.visible["pyenvbtn"] == false, "finish page")
+check(ui.visible["runbtn"] == false and ui.selected["runbtn"] == false and ui.visible["pyenvbtn"] ~= false, "finish page")
 uninstall = registry[("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TaiJiMPC6"):lower()]
 check(uninstall.displayicon == ROOT .. "\\Uninstall\\UnInstall.exe", "uninstaller icon")
 check(hasCommand("install_TaiJiDataSvc.bat") and not hasCommand("HostVM.exe"), "no HostVM touched")
+local function position(pattern)
+    for index, command in ipairs(commands) do
+        if command:find(pattern, 1, true) then return index end
+    end
+    return math.huge
+end
+local pythonEnvAt = position("reg Software\\TaijiControl\\PythonEnv|PythonPath=" .. ROOT .. "\\WinPy313\\python")
+check(pythonEnvAt < position("install_TaijiDataCollector.bat"), "PythonEnv before the collector starts")
+check(position("reg Software\\TaijiControl|InstallPath=") < position("install_python_env.bat"), "InstallPath before the script reads it")
+-- The script writes WinPy312; WinPy313 is written again after it.
+local last = 0
+for index, command in ipairs(commands) do
+    if command:find("reg Software\\TaijiControl\\PythonEnv|InstallPath=", 1, true) then last = index end
+end
+check(last > position("install_python_env.bat"), "PythonEnv restored after install_python_env.bat")
+-- PYSim's pySim.exe is a launcher of pySim.py as well.
+scenario({args = {components = "TaijiSim.PYSim"}})
+check(selection() == "Common.Runtime,Common.WinPy313,TaijiSim.PYSim", "PYSim needs Python: " .. selection())
+
+-- HostVM browses the local DA servers through OpcEnum, which only the x86 package installs.
+scenario({args = {components = "TaijiMPC.HostVM"}})
+StartSetup()
+commands = {}
+check(PostSetup() == true, "post setup 4")
+check(hasCommand("GBDA_Install_Prereq_x86.msi") and hasCommand("GBDA_Install_Prereq_x64.msi"), "HostVM gets both OPC halves")
+
+-- An explicitly requested component this installer cannot install fails a silent install
+-- instead of being dropped; an installed one stays as it is and counts as satisfied.
+scenario({missing = {160}, args = {components = "TaijiMPC.HostVM,Tool.RUS", s = true}})
+check(#errors == 1 and errors[1]:find("TaijiMPC.HostVM", 1, true) ~= nil, "unavailable reported: " .. tostring(errors[1]))
+StartSetup()
+check(failed ~= nil and unzipped == nil, "silent install refused for a missing archive")
+scenario({missing = {160}, installed = {"Common.WinPy313", "Common.Ident", "TaijiMPC.HostVM"},
+          args = {components = "TaijiMPC.HostVM,Tool.RUS", s = true}})
+check(#errors == 0, "installed HostVM satisfies the request")
+StartSetup()
+check(failed == nil and table.concat(unzipped, ",") == "150,190", "kept HostVM: " .. table.concat(unzipped or {}, ","))
+-- The same for a dependency: HostVM's Python missing from the installer and from the machine.
+scenario({missing = {152}, args = {components = "TaijiMPC.HostVM", s = true}})
+StartSetup()
+check(failed ~= nil and unzipped == nil, "unsatisfiable dependency refused")
+
+-- Changing the install path re-checks dependencies: Python and Identification were installed at
+-- the old path, so deselecting them kept HostVM; at an empty path HostVM needs them again.
+scenario({installed = {"Common.Runtime", "Common.Ident", "Common.WinPy313", "TaijiMPC.HostVM"}})
+OnSelChanged("item_Common_WinPy313", false)
+OnSelChanged("item_Common_Ident", false)
+check(ComponentSelected("TaijiMPC.HostVM") and not ComponentSelected("Common.WinPy313"), "kept by installed deps")
+chosenPath = "D:\\Empty"
+OnButtonClick("browfilebtn")
+check(ComponentSelected("Common.WinPy313") and ComponentSelected("Common.Ident") and ComponentSelected("TaijiMPC.HostVM"),
+      "deps selected again at the new path: " .. selection())
+check(ui.text["comphintlab"]:find("HostVM", 1, true) ~= nil, "hint after path change: " .. tostring(ui.text["comphintlab"]))
+-- Where the installer lacks WinPy313, HostVM cannot stay selected at the new path.
+scenario({missing = {152}, installed = {"Common.Runtime", "Common.Ident", "Common.WinPy313", "TaijiMPC.HostVM"}})
+check(ComponentSelected("TaijiMPC.HostVM"), "HostVM with Python installed at the old path")
+OnButtonClick("browfilebtn")
+check(not ComponentSelected("TaijiMPC.HostVM"), "HostVM dropped at the new path: " .. selection())
+chosenPath = nil
 
 print("Component selection: " .. count .. " cases passed")
