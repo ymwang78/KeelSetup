@@ -297,6 +297,30 @@ check(last > position("install_python_env.bat"), "PythonEnv restored after insta
 scenario({args = {components = "TaijiSim.PYSim"}})
 check(selection() == "Common.Runtime,Common.WinPy313,TaijiSim.PYSim", "PYSim needs Python: " .. selection())
 
+-- Upgrading only WinPy313 pauses what loads it: the installed data collector's service and its
+-- Python launchers, and pySim.exe. The collector service starts again; PYSim's OPC server does not
+-- load Python and keeps running.
+scenario({installed = {"Common.Runtime", "Common.WinPy313", "DataService.Client", "TaijiSim.PYSim"},
+          services = {"TaiJiDataCollector", "TaiJiOPCSim"}, args = {components = "Common.WinPy313"}})
+StartSetup()
+check(table.concat(unzipped, ",") == "152,150", "python only: " .. table.concat(unzipped, ","))
+check(hasCommand("net.exe stop TaiJiDataCollector") and hasCommand("kill DataCollector.exe")
+      and hasCommand("kill DataViewer.exe") and hasCommand("kill tsdbAdmin.exe"), "collector paused")
+check(hasCommand("kill pySim.exe") and not hasCommand("net.exe stop TaiJiOPCSim")
+      and not hasCommand("kill taiji-opcsim-server.exe"), "pySim paused, OPC server left running")
+commands = {}
+check(PostSetup() == true, "post setup python only")
+check(hasCommand("net.exe start TaiJiDataCollector") and not hasCommand("install_TaijiDataCollector.bat"), "collector restarted")
+check(not hasCommand("net.exe start TaiJiOPCSim"), "OPC server not restarted")
+-- Without a WinPy313 upgrade nothing of the collector is touched.
+scenario({installed = {"Common.Runtime", "Common.WinPy313", "DataService.Client"},
+          services = {"TaiJiDataCollector"}, args = {components = "Tool.RUS"}})
+StartSetup()
+check(not hasCommand("TaiJiDataCollector") and not hasCommand("DataCollector.exe"), "collector left running")
+commands = {}
+PostSetup()
+check(not hasCommand("TaiJiDataCollector"), "collector not restarted")
+
 -- HostVM browses the local DA servers through OpcEnum, which only the x86 package installs.
 scenario({args = {components = "TaijiMPC.HostVM"}})
 StartSetup()

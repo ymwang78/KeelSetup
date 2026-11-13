@@ -683,15 +683,19 @@ end
 
 local HOSTVM_SERVICE = "HostVM"
 -- Windows services the install_*.bat of a component registers, and the process to make sure of.
+-- python: the component's launchers that load python3.dll from the shared WinPy313 and so hold its
+-- files open; servicePython: the service process is one of them.
 local SERVICES = {
     ["DataService.Svr"] = {name = "TaiJiDataSvc", install = "TaiJiDataSvc\\install_TaiJiDataSvc.bat"},
     ["DataService.Client"] = {name = "TaiJiDataCollector", exe = "DataCollector.exe",
-                              install = "TaiJiDataClient\\install_TaijiDataCollector.bat"},
+                              install = "TaiJiDataClient\\install_TaijiDataCollector.bat",
+                              python = {"DataCollector.exe", "DataViewer.exe", "tsdbAdmin.exe"}, servicePython = true},
     ["TaijiSim.PYSim"] = {name = "TaiJiOPCSim", exe = "taiji-opcsim-server.exe",
-                          install = "TaiJiPYSim\\install_taijiopcsim.bat"},
+                          install = "TaiJiPYSim\\install_taijiopcsim.bat", python = {"pySim.exe"}},
 }
 
 local _restartHostVM = false  -- HostVM was stopped only because files it loads are upgraded
+local _restartServices = {}   -- the same for component services that use WinPy313
 
 local function ServiceExists(name)
     return installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\" .. name, "") ~= nil
@@ -702,10 +706,12 @@ local function HostVM(args)
 end
 
 -- Stops what holds files of the selected components open. Nothing of a component that is not
--- selected is stopped, except HostVM while the WinPy313 or identification files it loads are
--- replaced; PostSetup starts it again.
+-- selected is stopped, except what loads the WinPy313 or identification files being replaced:
+-- HostVM, and the data collector's and pySim's Python launchers. PostSetup starts the services
+-- among them again.
 function StopSelectedComponents()
     _restartHostVM = false
+    _restartServices = {}
     if ComponentSelected("TaijiSim.OPCSim") then
         installx.LogPrint("KillProcesses TaiJiOPCSim.exe ...")
         installx.ProcessKill("TaiJiOPCSim.exe")
@@ -733,11 +739,24 @@ function StopSelectedComponents()
         installx.ProcessKill("TaijiIdent32.exe")
     end
 
-    for key, service in pairs(SERVICES) do
-        if ComponentSelected(key) and ServiceExists(service.name) then
-            installx.LogPrint("Stop service " .. service.name .. " ...")
-            installx.ProcessExecute("net.exe stop " .. service.name, true, 60)
-            if service.exe then installx.ProcessKill(service.exe) end
+    local pythonChanges = ComponentSelected("Common.WinPy313")
+    for _, item in ipairs(_order) do
+        local service = SERVICES[item.key]
+        if service then
+            local selected = ComponentSelected(item.key)
+            -- Installed and not upgraded, but its Python launchers hold the WinPy313 being replaced.
+            local paused = not selected and pythonChanges and _installed[item.key] and service.python ~= nil
+            if (selected or (paused and service.servicePython)) and ServiceExists(service.name) then
+                installx.LogPrint("Stop service " .. service.name .. " ...")
+                installx.ProcessExecute("net.exe stop " .. service.name, true, 60)
+                if service.exe then installx.ProcessKill(service.exe) end
+                if paused then _restartServices[item.key] = true end
+            end
+            if selected or paused then
+                for _, exe in ipairs(service.python or {}) do
+                    installx.ProcessKill(exe)
+                end
+            end
         end
     end
 end
@@ -1216,6 +1235,11 @@ function PostSetup()
     SetupComponentService("DataService.Svr", 30)
     SetupComponentService("DataService.Client", 30)
     SetupComponentService("TaijiSim.PYSim", 30)
+    for _, item in ipairs(_order) do
+        if _restartServices[item.key] then
+            installx.ProcessExecute("net.exe start " .. SERVICES[item.key].name, true, 30)
+        end
+    end
 
 	Progress(97)
     if client then
