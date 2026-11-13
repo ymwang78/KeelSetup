@@ -16,7 +16,7 @@ local MARKERS = {
 }
 local SYSTEM = "C:\\Windows\\System32"
 
-local installed, missing, args, files, registry, commands, ui, unzipped, failed, errors, chosenPath
+local installed, missing, args, files, registry, commands, ui, unzipped, failed, errors, chosenPath, serviceStates
 
 local function startsWith(text, prefix)
     return text:sub(1, #prefix):lower() == prefix:lower()
@@ -59,6 +59,7 @@ installx = {
     SysACP = function() return 936 end,
     SysGetArg = function(name) return args[name] end,
     SetupFailed = function(reason) failed = reason return true end,
+    ServiceState = function(name) return serviceStates[name] end,
     RunAsAdmin = function() return true end,
     DiskFreeSpace = function() return 100 * 1024 * MB end,
     DuiVisible = function(name, visible)
@@ -114,8 +115,15 @@ local function scenario(options)
     ui = {visible = {}, text = {}, selected = {}, enabled = {}, attributes = {}, tab = 0}
     for _, key in ipairs(options.installed or {}) do installed[key] = true end
     for _, res in ipairs(options.missing or {}) do missing[res] = true end
+    -- services: registered and running; stoppedServices: registered but stopped.
+    serviceStates = {}
     for _, service in ipairs(options.services or {}) do
         registry[("SYSTEM\\CurrentControlSet\\Services\\" .. service):lower()] = {}
+        serviceStates[service] = "running"
+    end
+    for _, service in ipairs(options.stoppedServices or {}) do
+        registry[("SYSTEM\\CurrentControlSet\\Services\\" .. service):lower()] = {}
+        serviceStates[service] = "stopped"
     end
     registry["software\\taijicontrol"] = {installpath = ROOT}
     files[SYSTEM .. "\\icu.dll"] = true
@@ -312,6 +320,23 @@ commands = {}
 check(PostSetup() == true, "post setup python only")
 check(hasCommand("net.exe start TaiJiDataCollector") and not hasCommand("install_TaijiDataCollector.bat"), "collector restarted")
 check(not hasCommand("net.exe start TaiJiOPCSim"), "OPC server not restarted")
+-- A pause restores the state before it: a collector service and a HostVM an administrator had
+-- stopped are not started (their launchers still go, they hold the files).
+scenario({installed = {"Common.Runtime", "Common.WinPy313", "Common.Ident", "TaijiMPC.HostVM", "DataService.Client"},
+          stoppedServices = {"TaiJiDataCollector", "HostVM"}, args = {components = "Common.WinPy313"}})
+StartSetup()
+check(not hasCommand("net.exe stop TaiJiDataCollector") and hasCommand("kill DataViewer.exe"), "stopped collector not stopped again")
+commands = {}
+check(PostSetup() == true, "post setup with stopped services")
+check(not hasCommand("net.exe start TaiJiDataCollector") and not hasCommand("service start HostVM"),
+      "stopped services stay stopped")
+-- Running ones come back.
+scenario({installed = {"Common.Runtime", "Common.WinPy313", "Common.Ident", "TaijiMPC.HostVM", "DataService.Client"},
+          services = {"TaiJiDataCollector", "HostVM"}, args = {components = "Common.WinPy313"}})
+StartSetup()
+commands = {}
+PostSetup()
+check(hasCommand("net.exe start TaiJiDataCollector") and hasCommand("service start HostVM"), "running services restarted")
 -- Without a WinPy313 upgrade nothing of the collector is touched.
 scenario({installed = {"Common.Runtime", "Common.WinPy313", "DataService.Client"},
           services = {"TaiJiDataCollector"}, args = {components = "Tool.RUS"}})

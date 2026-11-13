@@ -1226,6 +1226,40 @@ static int l_SysGetArg(lua_State* L)
     return 1;
 }
 
+// ServiceState(name): the current state of a Windows service, as "running", "stopped",
+// "start_pending", "stop_pending", "continue_pending", "pause_pending" or "paused"; nil when no
+// service has that name or it cannot be queried.
+extern "C"
+static int l_ServiceState(lua_State* L)
+{
+    std::wstring name = Utf82Unicode(luaL_checkstring(L, 1));
+    const char* state = nullptr;
+    SC_HANDLE manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    if (manager != NULL) {
+        SC_HANDLE service = OpenServiceW(manager, name.c_str(), SERVICE_QUERY_STATUS);
+        if (service != NULL) {
+            SERVICE_STATUS_PROCESS status{};
+            DWORD needed = 0;
+            if (QueryServiceStatusEx(service, SC_STATUS_PROCESS_INFO, (LPBYTE)&status, sizeof(status), &needed)) {
+                switch (status.dwCurrentState) {
+                case SERVICE_RUNNING: state = "running"; break;
+                case SERVICE_STOPPED: state = "stopped"; break;
+                case SERVICE_START_PENDING: state = "start_pending"; break;
+                case SERVICE_STOP_PENDING: state = "stop_pending"; break;
+                case SERVICE_CONTINUE_PENDING: state = "continue_pending"; break;
+                case SERVICE_PAUSE_PENDING: state = "pause_pending"; break;
+                case SERVICE_PAUSED: state = "paused"; break;
+                }
+            }
+            CloseServiceHandle(service);
+        }
+        CloseServiceHandle(manager);
+    }
+    if (state != nullptr) lua_pushstring(L, state);
+    else lua_pushnil(L);
+    return 1;
+}
+
 // SetupFailed(reason): setup cannot start or go on. Records the failure for the exit code,
 // enables the close button and, in a silent install (/s), closes the installer, which would
 // otherwise wait for an extraction that never starts.
@@ -1568,6 +1602,7 @@ static const luaL_Reg reglib[] = {
     {"ProcessKill", l_ProcessKill},
 
     {"RunAsAdmin", l_RunAsAdmin},
+    {"ServiceState", l_ServiceState},
     {"SetupFailed", l_SetupFailed},
 
     {"RegGetValue", l_RegGetValue},

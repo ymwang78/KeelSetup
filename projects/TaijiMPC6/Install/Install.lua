@@ -701,6 +701,13 @@ local function ServiceExists(name)
     return installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Services\\" .. name, "") ~= nil
 end
 
+-- Whether a service is running (or on its way there). A pause for an upgrade of files it loads
+-- restores exactly this: a service an administrator stopped stays stopped.
+local function ServiceRunning(name)
+    local state = installx.ServiceState(name)
+    return state == "running" or state == "start_pending" or state == "continue_pending"
+end
+
 local function HostVM(args)
     installx.ProcessExecute("\"" .. _dirCompany .. "\\HostVM\\HostVM.exe\" " .. args)
 end
@@ -730,10 +737,11 @@ function StopSelectedComponents()
         installx.LogPrint("KillProcesses HostVM.exe ...")
         installx.ProcessKill("HostVM.exe")
     elseif hostvmFilesChange and _installed["TaijiMPC.HostVM"] then
+        -- Read before stopping: only a HostVM that was running is started again.
+        _restartHostVM = ServiceRunning(HOSTVM_SERVICE)
         HostVM("--stop HostVM")
         HostVM("service stop HostVM")
         installx.ProcessKill("HostVM.exe")
-        _restartHostVM = ServiceExists(HOSTVM_SERVICE)
     end
     if ComponentSelected("Common.Ident") then
         installx.ProcessKill("TaijiIdent32.exe")
@@ -746,11 +754,16 @@ function StopSelectedComponents()
             local selected = ComponentSelected(item.key)
             -- Installed and not upgraded, but its Python launchers hold the WinPy313 being replaced.
             local paused = not selected and pythonChanges and _installed[item.key] and service.python ~= nil
-            if (selected or (paused and service.servicePython)) and ServiceExists(service.name) then
+            -- A paused service is stopped, and started again later, only if it was running.
+            local stop = selected and ServiceExists(service.name)
+            if paused and service.servicePython and ServiceRunning(service.name) then
+                stop = true
+                _restartServices[item.key] = true
+            end
+            if stop then
                 installx.LogPrint("Stop service " .. service.name .. " ...")
                 installx.ProcessExecute("net.exe stop " .. service.name, true, 60)
                 if service.exe then installx.ProcessKill(service.exe) end
-                if paused then _restartServices[item.key] = true end
             end
             if selected or paused then
                 for _, exe in ipairs(service.python or {}) do

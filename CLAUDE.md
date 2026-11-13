@@ -97,6 +97,7 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 | `ProcessKill(name)` | Kill process by name |
 | `RunAsAdmin()` | UAC elevation |
 | `SetupFailed(reason)` | Mark setup as failed (non-zero exit code); a silent `/s` install closes |
+| `ServiceState(name)` | Windows service state: "running", "stopped", "start_pending", ... ; nil if no such service |
 
 ### Registry
 | Function | Description |
