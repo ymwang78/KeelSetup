@@ -71,7 +71,8 @@ libsrc/InstallXpress/
 | `DuiVisible(ctrlName, bool)` | 显示/隐藏控件；无参数则返回当前状态 |
 | `DuiEnable(ctrlName, bool)` | 启用/禁用控件 |
 | `DuiTabSelect(ctrlName, index)` | 切换 Tab；无参数则返回当前页 |
-| `DuiOptionSelect(ctrlName, bool)` | 设置/读取 Option（单选/复选）状态 |
+| `DuiOptionSelect(ctrlName, bool, notify)` | 设置/读取 Option（单选/复选）状态；notify=false 时不发 selectchanged |
+| `DuiAttribute(ctrlName, attr, value)` | 运行时设置控件的任意 XML 属性（如 foreimage、tooltip） |
 | `DuiWindowPos(name, x, y, w, h)` | 设置窗口位置和尺寸（name="_MainFrame"） |
 | `DuiMessage(msg, wparam, lparam)` | 向主窗口 PostMessage |
 
@@ -79,7 +80,8 @@ libsrc/InstallXpress/
 | 函数 | 说明 |
 |------|------|
 | `FilePathUnzip(resID, destDir, notifyID)` | 解压单个嵌入资源（异步） |
-| `FilePathUnzip({id1,id2,...}, destDir)` | 顺序解压多个资源（异步，全部完成才触发 PostSetup） |
+| `FilePathUnzip({id1,id2,...}, destDir)` | 并行解压多个资源，最多同时 3 个、按列表顺序开始（异步，全部完成才触发 PostSetup） |
+| `PackageInfo(resID)` | 嵌入的 7z 包解压后大小与条目数 `{size, entries}`（只读包头），没有该资源返回 nil |
 | `FilePathUnzip(zipPath, destDir, notifyID)` | 解压磁盘文件（异步） |
 | `FilePathExists(path)` | 路径是否存在 |
 | `FilePathMkdir(path)` | 递归创建目录 |

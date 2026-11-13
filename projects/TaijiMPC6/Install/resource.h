@@ -17,12 +17,20 @@
 #define IDB_PNG1                        132
 #define IDB_LOGO_PNG                    132
 #define IDR_REGCONTENT1                 133
-#define IDR_INSTALLSOFT1                134
 #define IDR_LUA_SCRIPT                  135
 #define IDR_MANIFEST1                   137
 #define IDB_RES_BACKGROUND              138
-#define IDR_INSTALLSOFT2                139
-#define IDR_INSTALLSOFT3                140
+// Component archives (INSTALLSOFT), ten IDs per top-level group of the component page.
+#define IDR_PKG_COMMON_RUNTIME          150
+#define IDR_PKG_COMMON_IDENT            151
+#define IDR_PKG_COMMON_WINPY313         152
+#define IDR_PKG_TAIJIMPC_HOSTVM         160
+#define IDR_PKG_TAIJIMPC_CLIENT         161
+#define IDR_PKG_DATASERVICE_SVR         170
+#define IDR_PKG_DATASERVICE_CLIENT      171
+#define IDR_PKG_TAIJISIM_OPCSIM         180
+#define IDR_PKG_TAIJISIM_PYSIM          181
+#define IDR_PKG_TOOL_RUS                190
 #define IDC_STATIC                      -1
 
 // Next default values for new objects

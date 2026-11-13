@@ -157,9 +157,18 @@ IDI_INSTALL             ICON                    "Install.ico"
 // INSTALLSOFT
 //
 
-IDR_INSTALLSOFT1        INSTALLSOFT             "res\\Win32.7z"
-IDR_INSTALLSOFT2        INSTALLSOFT             "res\\WinPy313.7z"
-IDR_INSTALLSOFT3        INSTALLSOFT             "res\\TaiJiDataSvc.7z"
+// One archive per selectable component; Install.lua's COMPONENTS maps the IDs to the
+// component page. build_TaijiMPC6.py checks that this list matches the archives it builds.
+IDR_PKG_COMMON_RUNTIME      INSTALLSOFT         "res\\Common.7z"
+IDR_PKG_COMMON_IDENT        INSTALLSOFT         "res\\Ident.7z"
+IDR_PKG_COMMON_WINPY313     INSTALLSOFT         "res\\WinPy313.7z"
+IDR_PKG_TAIJIMPC_HOSTVM     INSTALLSOFT         "res\\HostVM.7z"
+IDR_PKG_TAIJIMPC_CLIENT     INSTALLSOFT         "res\\TaijiMPC6.7z"
+IDR_PKG_DATASERVICE_SVR     INSTALLSOFT         "res\\TaiJiDataSvc.7z"
+IDR_PKG_DATASERVICE_CLIENT  INSTALLSOFT         "res\\TaiJiDataClient.7z"
+IDR_PKG_TAIJISIM_OPCSIM     INSTALLSOFT         "res\\TaiJiOPCSim.7z"
+IDR_PKG_TAIJISIM_PYSIM      INSTALLSOFT         "res\\TaiJiPYSim.7z"
+IDR_PKG_TOOL_RUS            INSTALLSOFT         "res\\Tool_RUS.7z"
 
 /////////////////////////////////////////////////////////////////////////////
 //

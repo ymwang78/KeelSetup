@@ -510,7 +510,17 @@ void CMainFrame::InstallZipParallel(
         HWND hWnd;
         std::atomic<int>* remaining;
         std::atomic<bool>* anyFailed;
+        HANDLE slots;
     };
+
+    // At most kMaxParallelUnzip archives extract at once. SzArEx_Extract keeps a whole solid
+    // block of its archive in memory (up to the packer's -ms=64m) besides the LZMA2 dictionary,
+    // and every worker writes to the same disk, so an installer with many component archives
+    // must not start them all together. Workers take a slot in the order they were started;
+    // a script that lists the biggest archive first keeps it from being the last to finish.
+    // Without a semaphore (CreateSemaphore failed) all archives extract at once, as before.
+    const LONG kMaxParallelUnzip = 3;
+    HANDLE slots = CreateSemaphoreW(NULL, kMaxParallelUnzip, kMaxParallelUnzip, NULL);
 
     auto* remaining = new std::atomic<int>((int)resources.size());
     auto* anyFailed = new std::atomic<bool>(false);
@@ -527,22 +537,27 @@ void CMainFrame::InstallZipParallel(
             jobs[i].skipPrefixes,
             this->GetHWND(),
             remaining,
-            anyFailed
+            anyFailed,
+            slots
         };
 
         HANDLE h = (HANDLE)_beginthreadex(NULL, 0, [](void* p) -> unsigned {
             auto* c = static_cast<WorkerCtx*>(p);
+            if (c->slots) WaitForSingleObject(c->slots, INFINITE);
             CUnZip7z unzip;
             int ret = unzip.unzip_7z_file(
                 c->resource, c->unzipDir,
                 c->hWnd, WM_INSTALLPROGRES_MSG,
                 (int)c->resourceID, c->skipPrefixes);
+            if (c->slots) ReleaseSemaphore(c->slots, 1, NULL);
 
             if (ret != 0) {
                 APPLOG(Log::LOG_ERROR)("InstallZipParallel: extraction failed for resource %u (ret=%d)\n", c->resourceID, ret);
                 c->anyFailed->store(true);
             }
 
+            // The last worker to finish owns the shared state: every other one has released
+            // its slot and stopped touching it.
             if (--(*(c->remaining)) == 0) {
                 if (!c->anyFailed->load())
                     ::PostMessage(c->hWnd, WM_INSTALLPROGRES_MSG, (WPARAM)c->completionNotifyID, -1);
@@ -550,6 +565,7 @@ void CMainFrame::InstallZipParallel(
                     ::PostMessage(c->hWnd, WM_INSTALLPROGRES_MSG, 0, -2);
                 delete c->remaining;
                 delete c->anyFailed;
+                if (c->slots) CloseHandle(c->slots);
             }
             delete c;
             return 0u;
@@ -564,6 +580,7 @@ void CMainFrame::InstallZipParallel(
                 ::PostMessage(this->GetHWND(), WM_INSTALLPROGRES_MSG, 0, -2);
                 delete remaining;
                 delete anyFailed;
+                if (slots) CloseHandle(slots);
             }
         } else {
             threads.push_back(h);

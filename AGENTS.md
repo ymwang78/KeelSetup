@@ -42,6 +42,9 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 | RESID_SOFT2   | 139 | IDR INSTALLSOFT|
 | RESID_SOFT3   | 140 | IDR INSTALLSOFT|
 
+   INSTALLSOFT IDs are a convention only: `FilePathUnzip` takes any list of them. An installer whose
+   users choose components gives each component its own archive, as TaijiMPC6 does (IDs 150-199, ten
+   per group of its component page; see its `resource.h` and `COMPONENTS` in its `Install.lua`).
 3. Put your installation packages in `res/` and reference them in `Install.rc`.
 4. Write `Install.lua`. The framework pre-loads these globals:
    - `HRootKey` — registry root key constants
@@ -66,7 +69,8 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 | `DuiVisible(ctrl, bool)` | Show/hide control |
 | `DuiEnable(ctrl, bool)` | Enable/disable control |
 | `DuiTabSelect(ctrl, index)` | Switch tab |
-| `DuiOptionSelect(ctrl, bool)` | Check/uncheck option |
+| `DuiOptionSelect(ctrl, bool, notify)` | Check/uncheck option; `notify=false` does not send selectchanged (no `OnSelChanged`) |
+| `DuiAttribute(ctrl, attr, value)` | Set any skin XML attribute at run time (e.g. `foreimage`, `tooltip`) |
 | `DuiSetBkImage(ctrl, desc)` | Set background image |
 | `DuiTextColor(ctrl, color)` | Set text color (ARGB) |
 | `DuiWindowPos(ctrl, x,y,w,h)` | Move/resize window |
@@ -82,7 +86,8 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 | `FilePathChoose(title, default)` | Browse folder dialog |
 | `FilePathCreateShortCut(lnk, target, workdir, desc)` | Create shell shortcut |
 | `FilePathGetSpecialLocation(csidl)` | Get special folder path |
-| `FilePathUnzip(resIDs, dir, skipPrefixes)` | Async parallel extraction |
+| `FilePathUnzip(resIDs, dir, skipPrefixes)` | Async parallel extraction, at most 3 archives at a time in list order |
+| `PackageInfo(resID)` | `{size, entries}` of an embedded INSTALLSOFT 7z (unpacked bytes, from the header), nil if absent |
 | `DiskFreeSpace(path)` | Free bytes on drive |
 
 ### Process
@@ -91,6 +96,7 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 | `ProcessExecute(cmd, hidden, waitSec)` | Run process (MSI-aware) |
 | `ProcessKill(name)` | Kill process by name |
 | `RunAsAdmin()` | UAC elevation |
+| `SetupFailed(reason)` | Mark setup as failed (non-zero exit code); a silent `/s` install closes |
 
 ### Registry
 | Function | Description |
@@ -109,6 +115,7 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 | `SysPathAdd(path)` | Append to system PATH |
 | `SysIsWin10OrLater()` | True if Windows 10+ |
 | `SysGetArch()` | "x64" / "x86" / "arm64" |
+| `SysGetArg(name)` | Command-line `/name=value` (also `-`/`--`): the value, true for a bare `/name`, nil if absent |
 | `SysNetworkAvailable()` | True if internet connected |
 | `SysGetInstalledSoftware(name)` | Installed version or nil |
 

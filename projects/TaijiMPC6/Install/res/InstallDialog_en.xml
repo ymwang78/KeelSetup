@@ -33,12 +33,47 @@
 			</VerticalLayout>
 			<VerticalLayout name="installprotlayout" inset="24,6,24,6">
 				<RichEdit name="portcontent" inset="2,2,2,2" textpadding="8,6,6,6" bkcolor="#FFFFFFFF" height="270" text="" textcolor="#000000" multiline="true" rich="false" readonly="true" bordersize="1" bordercolor="#FFEEEEEE" vscrollbar="true" />
-			</VerticalLayout>			
+			</VerticalLayout>
+			<!-- Component page: grp_<group> and item_<group>_<item> match COMPONENTS in Install.lua, which also sets the texts -->
+			<VerticalLayout name="componentlayout" inset="36,6,30,10">
+				<HorizontalLayout height="258">
+					<VerticalLayout name="compcol1" width="262" childpadding="6" vscrollbar="true">
+						<Option name="grp_Common" text="Common" font="1" height="20" textcolor="#FF333333" />
+						<Option name="item_Common_Runtime" text="Runtime" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
+						<Option name="item_Common_Ident" text="Ident" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
+						<Option name="item_Common_WinPy313" text="WinPy313" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
+						<Control height="4" />
+						<Option name="grp_TaijiMPC" text="TaijiMPC" font="1" height="20" textcolor="#FF333333" />
+						<Option name="item_TaijiMPC_HostVM" text="HostVM" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
+						<Option name="item_TaijiMPC_TaijiMPC6" text="TaijiMPC6" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
+					</VerticalLayout>
+					<Control width="8" />
+					<VerticalLayout name="compcol2" childpadding="6" vscrollbar="true">
+						<Option name="grp_DataService" text="DataService" font="1" height="20" textcolor="#FF333333" />
+						<Option name="item_DataService_Svr" text="Svr" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
+						<Option name="item_DataService_Client" text="Client" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
+						<Control height="4" />
+						<Option name="grp_TaijiSim" text="TaijiSim" font="1" height="20" textcolor="#FF333333" />
+						<Option name="item_TaijiSim_OPCSim" text="OPCSim" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
+						<Option name="item_TaijiSim_PYSim" text="PYSim" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
+						<Control height="4" />
+						<Option name="grp_Tool" text="Tool" font="1" height="20" textcolor="#FF333333" />
+						<Option name="item_Tool_RUS" text="RUS" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
+					</VerticalLayout>
+				</HorizontalLayout>
+				<Label name="comphintlab" text="" height="22" textcolor="#FF5DA5FF" />
+				<HorizontalLayout height="22">
+					<Label name="compspacelab" text="" textcolor="#FF7F7F7F" />
+					<Button name="compokbtn" text="OK" font="0" align="right" width="60" height="20" textcolor="#FF5DA5FF" hottextcolor="#FF5DB5FF" />
+				</HorizontalLayout>
+			</VerticalLayout>
 		</TabLayout>
 		<HorizontalLayout height="56" inset="21,14,20,0" name="sureportlayout">
 			<Option name="protcheckbtn" width="80" text="I agree" selected="true" />
 			<Button name="lookprotbtn" text="License Agreement" font="0" align="center" textcolor="#FF5DA5FF" width="110" height="18" hottextcolor="#FF5DB5FF" />
-			<Control name="spacecontrol" />	
+			<Control name="spacecontrol" />
+			<Button name="compbtn" text="Components" font="0" align="right" width="80" height="18" textcolor="#FF7F7F7F" hottextcolor="#FF999999" />
+			<Control name="spacecontrol3" width="16" />
 			<Button name="custombtn" text="Custom Installation" font="0" align="right" width="150" height="18" textcolor="#FF7F7F7F" hottextcolor="#FF999999" />
 		</HorizontalLayout>
 		<HorizontalLayout height="48" name="customlayout" inset="38,10,21,0" bkcolor="#FFF8F8F8" visible="false">
