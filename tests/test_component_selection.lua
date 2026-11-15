@@ -17,6 +17,7 @@ local MARKERS = {
 local SYSTEM = "C:\\Windows\\System32"
 
 local installed, missing, args, files, registry, commands, ui, unzipped, failed, errors, chosenPath, serviceStates
+local freeBytes = 100 * 1024 * MB
 
 local function startsWith(text, prefix)
     return text:sub(1, #prefix):lower() == prefix:lower()
@@ -61,7 +62,7 @@ installx = {
     SetupFailed = function(reason) failed = reason return true end,
     ServiceState = function(name) return serviceStates[name] end,
     RunAsAdmin = function() return true end,
-    DiskFreeSpace = function() return 100 * 1024 * MB end,
+    DiskFreeSpace = function() return freeBytes end,
     DuiVisible = function(name, visible)
         if visible == nil then return ui.visible[name] == true end
         ui.visible[name] = visible
@@ -76,7 +77,7 @@ installx = {
     end,
     DuiEnable = function(name, enabled) ui.enabled[name] = enabled return true end,
     DuiAttribute = function(name, attribute, value) ui.attributes[name .. "." .. attribute] = value return true end,
-    DuiTextColor = function() return true end,
+    DuiTextColor = function(name, color) ui.colors[name] = color return true end,
     DuiTabSelect = function(name, index)
         if index == nil then return ui.tab end
         ui.tab = index
@@ -112,7 +113,8 @@ local function scenario(options)
     options = options or {}
     installed, missing, args, files = {}, {}, options.args or {}, {}
     registry, commands, unzipped, failed, errors = {}, {}, nil, nil, {}
-    ui = {visible = {}, text = {}, selected = {}, enabled = {}, attributes = {}, tab = 0}
+    ui = {visible = {}, text = {}, selected = {}, enabled = {}, attributes = {}, colors = {}, tab = 0}
+    freeBytes = 100 * 1024 * MB
     for _, key in ipairs(options.installed or {}) do installed[key] = true end
     for _, res in ipairs(options.missing or {}) do missing[res] = true end
     -- services: registered and running; stoppedServices: registered but stopped.
@@ -386,5 +388,39 @@ check(ComponentSelected("TaijiMPC.HostVM"), "HostVM with Python installed at the
 OnButtonClick("browfilebtn")
 check(not ComponentSelected("TaijiMPC.HostVM"), "HostVM dropped at the new path: " .. selection())
 chosenPath = nil
+
+-- The page is step two: the main page's big button opens it, its own button starts the install,
+-- and "Back" returns. The license checkbox gates the first step.
+scenario()
+OnSelChanged("protcheckbtn", false)
+check(ui.enabled["nextbtn"] == false, "license gates the next button")
+OnSelChanged("protcheckbtn", true)
+OnButtonClick("nextbtn")
+check(ui.tab == 2 and ui.visible["sureportlayout"] == false and unzipped == nil, "next shows the component page")
+OnButtonClick("compbackbtn")
+check(ui.tab == 0 and ui.visible["sureportlayout"] == true, "back returns to the main page")
+OnButtonClick("nextbtn")
+OnButtonClick("starinstallbtn")
+check(unzipped ~= nil and ui.tab == 0 and ui.visible["nextbtn"] == false and ui.visible["installprogress"] == true,
+      "install from the page shows the progress on the main page")
+-- A start that fails is reported on the page, in red, and the page stays; the next change puts the
+-- hint back in its own colour.
+scenario({args = {components = "Common.Runtime"}})
+OnButtonClick("nextbtn")
+OnButtonClick("starinstallbtn")
+check(unzipped == nil and ui.tab == 2 and ui.text["comphintlab"] == "请至少选择一个组件"
+      and ui.colors["comphintlab"] == 0xFFFF0000, "nothing selected shown on the page")
+OnSelChanged("item_Tool_RUS", true)
+check(ui.colors["comphintlab"] == 0xFF5DA5FF and ui.text["comphintlab"] ~= "请至少选择一个组件", "hint restored")
+scenario()
+freeBytes = 50 * MB
+OnButtonClick("nextbtn")
+OnButtonClick("starinstallbtn")
+check(unzipped == nil and ui.text["comphintlab"]:find("安装位置空间不足", 1, true) ~= nil, "space shortage shown on the page")
+-- Silent installs never see the page and fail rather than wait.
+scenario({args = {s = true}})
+freeBytes = 50 * MB
+StartSetup()
+check(failed ~= nil and failed:find("安装位置空间不足", 1, true) ~= nil and unzipped == nil, "silent space shortage fails")
 
 print("Component selection: " .. count .. " cases passed")
