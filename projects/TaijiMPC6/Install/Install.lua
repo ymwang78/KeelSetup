@@ -19,7 +19,7 @@ local _strResourceCN = {
 	CHOOSE_INSTALL_PATH = "选择安装路径",
 	LICENSE = "安装许可协议",
 	COMPONENTS = "选择安装组件",
-	COMPONENTS_OK = "确定",
+	COMPONENTS_BACK = "返回",
 	SPACE_NOT_ENOUGH = "系统空间不足",
 	SPACE_HINT = "安装位置空间不足：需要约 %s，可用 %s，请另外选择安装位置",
 	SPACE_LABEL = "所需空间约 %s，可用 %s",
@@ -46,7 +46,7 @@ local _strResourceEN = {
 	CHOOSE_INSTALL_PATH = "Choose Install Path",
 	LICENSE = "License Agreement",
 	COMPONENTS = "Select Components",
-	COMPONENTS_OK = "OK",
+	COMPONENTS_BACK = "Back",
 	SPACE_NOT_ENOUGH = "System space is not enough",
 	SPACE_HINT = "Not enough space at the install path: needs about %s, %s free. Please choose another install path",
 	SPACE_LABEL = "Needs about %s, %s free",
@@ -476,8 +476,9 @@ function RefreshComponentPage()
         installx.DuiEnable(group.control, selectable)
         SetAttribute(group.control, "foreimage", state == "partial" and PARTIAL_IMAGE or "")
     end
-    installx.DuiText("compokbtn", _strResource.COMPONENTS_OK)
+    installx.DuiText("compbackbtn", _strResource.COMPONENTS_BACK)
     installx.DuiText("comphintlab", _hint or "")
+    installx.DuiTextColor("comphintlab", 0xFF5DA5FF)
     local need, free = ComponentSpaceNeeded(), FreeSpaceAt(_dirCompany)
     installx.DuiText("compspacelab", string.format(_strResource.SPACE_LABEL, FormatSize(need), free and FormatSize(free) or "?"))
     installx.DuiTextColor("compspacelab", (free and free < need) and 0xFFFF0000 or 0xFF7F7F7F)
@@ -573,9 +574,10 @@ function OnButtonClick(btnName)
         else
             installx.DuiMessage(0x10, 0, 0) -- WM_CLOSE
         end
-    elseif (btnName == "compbtn") then
+    elseif (btnName == "nextbtn") then
+        -- Step two: the components; starinstallbtn on that page starts the installation.
         ShowComponentPage()
-    elseif (btnName == "compokbtn") then
+    elseif (btnName == "compbackbtn") then
         ShowMainPage()
     elseif (btnName == "lookprotbtn") then
         if (installx.DuiVisible("customlayout")) then
@@ -599,7 +601,7 @@ end
 
 function OnSelChanged(btnName, isSelected)
     if (btnName == "protcheckbtn") then
-        installx.DuiEnable("starinstallbtn", isSelected)
+        installx.DuiEnable("nextbtn", isSelected)
         return
     end
     local groupId = btnName:match("^grp_(%w+)$")
@@ -658,17 +660,16 @@ function OnUnzipProgress(nNotifyID, nTotalFileNum, nCurFileIndex, nTotalSize, nC
 	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
 end
 
+-- Returns false and the message to show when the system drive or the install path lacks space.
 function CheckDiskSpace()
     local freeSystemSpace = installx.DiskFreeSpace("")
     if (freeSystemSpace ~= nil and freeSystemSpace <= 10*1024*1024) then
-        ErrorHint(_strResource.SPACE_NOT_ENOUGH)
-        return false
+        return false, _strResource.SPACE_NOT_ENOUGH
     end
     -- An unknown free space (the drive cannot be queried) does not block the install.
     local need, free = ComponentSpaceNeeded(), FreeSpaceAt(_dirCompany)
     if (free ~= nil and free < need) then
-        ErrorHint(string.format(_strResource.SPACE_HINT, FormatSize(need), FormatSize(free)))
-        return false
+        return false, string.format(_strResource.SPACE_HINT, FormatSize(need), FormatSize(free))
     end
     return true
 end
@@ -795,6 +796,12 @@ function StartSetup()
 
     local function fail(message)
         ErrorHint(message)
+        -- The installation starts from the component page: say it there too, in red, where the
+        -- user can correct the selection. The next change on the page puts the hint back.
+        if installx.DuiTabSelect("installlayout") == 2 then
+            installx.DuiText("comphintlab", tostring(message))
+            installx.DuiTextColor("comphintlab", 0xFFFF0000)
+        end
         -- A silent install has nobody to correct the selection and would wait forever.
         if installx.SysGetArg("s") then installx.SetupFailed(message) end
     end
@@ -812,9 +819,9 @@ function StartSetup()
     end
 
 	installx.LogPrint("CheckDiskSpace ...")
-    if ( not CheckDiskSpace() ) then
-        if installx.SysGetArg("s") then installx.SetupFailed("not enough disk space") end
-        return
+    local spaceOk, spaceError = CheckDiskSpace()
+    if not spaceOk then
+        return fail(spaceError)
     end
 
 	installx.LogPrint("Check Exists " .. _dirCompany .. " ...")
@@ -835,6 +842,7 @@ function StartSetup()
     installx.DuiVisible("errortiplab", false)
 
     installx.DuiEnable("closebtn", false)
+    installx.DuiVisible("nextbtn", false)
     installx.DuiVisible("starinstallbtn", false)
     installx.DuiVisible("sureportlayout", false)
     installx.DuiVisible("installprogress", true)
