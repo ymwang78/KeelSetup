@@ -718,12 +718,12 @@ end
 
 -- Stops what holds files of the selected components open. Nothing of a component that is not
 -- selected is stopped, except what loads the WinPy313 or identification files being replaced:
--- HostVM, and the data collector's and pySim's Python launchers. PostSetup starts the services
--- among them again.
+-- HostVM, TaiJiOPCSim, and the data collector's and pySim's Python launchers. PostSetup starts
+-- the services among them again.
 function StopSelectedComponents()
     _restartHostVM = false
     _restartServices = {}
-    if ComponentSelected("TaijiSim.OPCSim") then
+    if ComponentSelected("TaijiSim.OPCSim") or (ComponentSelected("Common.Ident") and _installed["TaijiSim.OPCSim"]) then
         installx.LogPrint("KillProcesses TaiJiOPCSim.exe ...")
         installx.ProcessKill("TaiJiOPCSim.exe")
     end
@@ -860,6 +860,13 @@ function StartSetup()
 	for _, item in ipairs(_order) do
 		if item.info and not _selected[item.key] then
 			installx.LogPrint("Skip component " .. item.key .. (_installed[item.key] and " (installed, kept as is)" or ""))
+		end
+		if _installed[item.key] and not _selected[item.key] then
+			for _, dep in ipairs(item.deps or {}) do
+				if not ComponentPresent(dep) then
+					installx.LogPrint("Installed component " .. item.key .. " is missing dependency " .. dep)
+				end
+			end
 		end
 	end
 	installx.FilePathUnzip(resourceIDs, _dirCompany)
@@ -1108,19 +1115,31 @@ local TAIJIOPCSIM_CLSID = "{A48A6241-A024-4F99-B105-5DF8CCEA66BA}"
 -- launching user) HostVM, a SYSTEM service, gets its own TaiJiOPCSim.exe in session 0 that desktop
 -- OPC tools cannot see; as the Interactive User every client shares the one in the console session.
 -- The flip side: with nobody logged on, activation fails. Skipped when TaiJiOPCSim is not installed,
--- so no COM keys point at a missing exe. UnInstall.lua deletes the same keys.
-function RegisterTaiJiOPCSim()
+-- so no COM keys point at a missing exe.
+-- When `reinstall` is false (OPCSim is already installed, not selected in this run), skips
+-- `-RegServer` (whose modal MessageBox blocks silent installs and whose ForceRemove briefly deletes
+-- the CLSID key) unless the CLSID key itself is missing, and only writes the AppID/RunAs values when
+-- the CLSID key lacks its AppID value (e.g. after a manual `-RegServer`), preserving any DCOM
+-- identity a site customized through dcomcnfg. UnInstall.lua deletes the same keys.
+function RegisterTaiJiOPCSim(reinstall)
     local exe = _dirCompany .. "\\TaiJiOPCSim\\bin\\TaiJiOPCSim.exe"
     if not installx.FilePathExists(exe) then
         installx.LogPrint("Skip TaiJiOPCSim registration, not installed: " .. exe)
         return
     end
-    installx.ProcessExecute("\"" .. exe .. "\" -RegServer", false, 10)
-
-    -- After -RegServer, which writes the CLSID key but no AppID.
     local HKLM = HRootKey.HKEY_LOCAL_MACHINE
     local clsidKey = "SOFTWARE\\Classes\\WOW6432Node\\CLSID\\" .. TAIJIOPCSIM_CLSID
     local appIdKey = "SOFTWARE\\Classes\\AppID\\" .. TAIJIOPCSIM_CLSID
+    local clsidExists = installx.RegGetValue(HKLM, clsidKey, "") ~= nil
+    if reinstall ~= false or not clsidExists then
+        installx.ProcessExecute("\"" .. exe .. "\" -RegServer", false, 10)
+    elseif installx.RegGetValue(HKLM, clsidKey, "AppID") == TAIJIOPCSIM_CLSID
+       and installx.RegGetValue(HKLM, appIdKey, "") ~= nil then
+        installx.LogPrint("Skip TaiJiOPCSim registration, AppID already present")
+        return
+    end
+
+    -- After -RegServer, which writes the CLSID key but no AppID.
     installx.RegSetValue(HKLM, clsidKey .. "\\Implemented Categories", "", "")
     installx.RegSetValue(HKLM, clsidKey .. "\\Implemented Categories\\{63D5F430-CFE4-11d1-B2C8-0060083BA1FB}", "", "")
     installx.RegSetValue(HKLM, clsidKey .. "\\Implemented Categories\\{63D5F432-CFE4-11d1-B2C8-0060083BA1FB}", "", "")
@@ -1200,7 +1219,10 @@ end
 
 -- Returning false tells the installer that setup did not complete: it shows the failure and
 -- enables the close button instead of moving on to the finish page. Every step belongs to a
--- selected component; nothing of a component that was not selected is touched.
+-- selected component; nothing of a component that was not selected is touched, except repairing
+-- missing DCOM AppID registration of an already-installed TaiJiOPCSim whose Common.Ident dependency
+-- is present (so a prior manual `-RegServer` or older installer does not leave HostVM isolated in
+-- session 0).
 function PostSetup()
 
     local hostvm = ComponentSelected("TaijiMPC.HostVM")
@@ -1229,8 +1251,8 @@ function PostSetup()
     InstallOpcCoreComponents(ComponentSelected("TaijiSim.OPCSim") or ComponentSelected("TaijiSim.PYSim") or hostvm, hostvm)
 
 	Progress(96)
-    if ComponentPresent("TaijiSim.OPCSim") then
-        RegisterTaiJiOPCSim()
+    if ComponentPresent("TaijiSim.OPCSim") and ComponentPresent("Common.Ident") then
+        RegisterTaiJiOPCSim(ComponentSelected("TaijiSim.OPCSim"))
     end
     -- The Envelope-protected tjonlinelib DLLs of the identification worker need the run-time.
     if ComponentSelected("Common.Ident") then

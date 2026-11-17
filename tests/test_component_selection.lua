@@ -1,7 +1,9 @@
 -- Run from the repository root: lua tests/test_component_selection.lua
 -- The TaijiMPC6 component page: default selection, dependencies across groups, the three group
 -- states, /components, which archives StartSetup extracts in which order, and that StartSetup and
--- PostSetup only touch the selected components.
+-- PostSetup only touch the selected components (except stopping processes that hold files of a
+-- selected dependency open, and repairing missing DCOM AppID registration of an already-installed
+-- TaiJiOPCSim whose Common.Ident dependency is present).
 local ROOT = "C:\\Test path\\中文"
 local MB = 1024 * 1024
 local SIZES = {[150] = 27, [151] = 68, [152] = 925, [160] = 73, [161] = 84,
@@ -128,6 +130,9 @@ local function scenario(options)
         serviceStates[service] = "stopped"
     end
     registry["software\\taijicontrol"] = {installpath = ROOT}
+    if installed["TaijiSim.OPCSim"] then
+        registry["software\\classes\\wow6432node\\clsid\\{a48a6241-a024-4f99-b105-5df8ccea66ba}"] = {}
+    end
     files[SYSTEM .. "\\icu.dll"] = true
     files[ROOT .. "\\HostVM\\hostvm.xml"] = true
     assert(loadfile("projects/TaijiMPC6/Install/Install.lua"))()
@@ -309,12 +314,56 @@ scenario({args = {components = "TaijiSim.PYSim"}})
 check(selection() == "Common.Runtime,Common.WinPy313,TaijiSim.PYSim", "PYSim needs Python: " .. selection())
 scenario({args = {components = "TaijiSim.OPCSim"}})
 check(selection() == "Common.Runtime,Common.Ident,TaijiSim.OPCSim", "OPCSim needs Ident: " .. selection())
--- An already installed OPCSim gets its AppID/RunAs registration repaired in PostSetup even when not re-selected.
+-- Default upgrade of an earlier installation that had OPCSim without Common.Ident selects Ident silently.
+scenario({installed = {"Common.Runtime", "TaijiSim.OPCSim"}})
+check(selection() == "Common.Runtime,Common.Ident,TaijiSim.OPCSim", "upgrade of OPCSim adds Ident: " .. selection())
+check(ui.text["comphintlab"] == "", "default upgrade leaves hint empty")
+-- An already-installed OPCSim whose CLSID lost AppID (e.g. after a manual -RegServer) gets its
+-- AppID/RunAs keys repaired in PostSetup without re-running -RegServer; once AppID is back, an
+-- unrelated incremental install leaves a site-configured RunAs untouched; a missing CLSID falls
+-- back to -RegServer.
 scenario({installed = {"Common.Runtime", "Common.Ident", "TaijiSim.OPCSim"}, args = {components = "Tool.RUS"}})
 StartSetup()
+check(not hasCommand("kill TaiJiOPCSim.exe"), "unselected OPCSim left running")
 commands = {}
 check(PostSetup() == true, "post setup with installed OPCSim")
-check(hasCommand("-RegServer"), "installed OPCSim re-registered in PostSetup")
+check(not hasCommand("-RegServer"), "installed OPCSim repaired without -RegServer")
+check(hasCommand("reg SOFTWARE\\Classes\\WOW6432Node\\CLSID\\{A48A6241-A024-4F99-B105-5DF8CCEA66BA}|AppID={A48A6241-A024-4F99-B105-5DF8CCEA66BA}")
+      and hasCommand("reg SOFTWARE\\Classes\\AppID\\{A48A6241-A024-4F99-B105-5DF8CCEA66BA}|RunAs=Interactive User"),
+      "installed OPCSim AppID/RunAs repaired in PostSetup")
+local opcsimAppId = ("SOFTWARE\\Classes\\AppID\\{A48A6241-A024-4F99-B105-5DF8CCEA66BA}"):lower()
+registry[opcsimAppId].runas = "Domain\\SiteUser"
+commands = {}
+check(PostSetup() == true, "second post setup with intact AppID")
+check(not hasCommand("-RegServer") and not hasCommand("RunAs=") and registry[opcsimAppId].runas == "Domain\\SiteUser",
+      "site DCOM identity preserved when AppID is intact")
+registry[("SOFTWARE\\Classes\\WOW6432Node\\CLSID\\{A48A6241-A024-4F99-B105-5DF8CCEA66BA}"):lower()] = nil
+commands = {}
+check(PostSetup() == true, "post setup with missing OPCSim CLSID")
+check(hasCommand("-RegServer")
+      and hasCommand("reg SOFTWARE\\Classes\\AppID\\{A48A6241-A024-4F99-B105-5DF8CCEA66BA}|RunAs=Interactive User"),
+      "missing CLSID falls back to -RegServer and writes RunAs")
+-- Without OPCSim installed (or when an unselected OPCSim still lacks Common.Ident), Tool.RUS does not touch OPCSim.
+scenario({installed = {"Common.Runtime"}, args = {components = "Tool.RUS"}})
+StartSetup()
+commands = {}
+check(PostSetup() == true, "post setup without OPCSim")
+check(not hasCommand("-RegServer") and not hasCommand("TaiJiOPCSim"), "no OPCSim registration when not installed")
+scenario({installed = {"Common.Runtime", "TaijiSim.OPCSim"}, args = {components = "Tool.RUS"}})
+StartSetup()
+commands = {}
+check(PostSetup() == true, "post setup with OPCSim missing Ident")
+check(not hasCommand("-RegServer") and not hasCommand("TaiJiOPCSim"), "incomplete OPCSim not registered")
+-- Upgrading only Common.Ident stops an installed OPCSim that holds Common\Lib open.
+scenario({installed = {"Common.Runtime", "Common.Ident", "TaijiSim.OPCSim"}, args = {components = "Common.Ident"}})
+StartSetup()
+check(table.concat(unzipped, ",") == "151,150", "ident only: " .. table.concat(unzipped, ","))
+check(hasCommand("kill TaiJiOPCSim.exe") and hasCommand("kill TaijiIdent32.exe"),
+      "upgrading Ident stops installed OPCSim holding Common\\Lib")
+scenario({installed = {"Common.Runtime", "Common.Ident"}, args = {components = "Common.Ident"}})
+StartSetup()
+check(hasCommand("kill TaijiIdent32.exe") and not hasCommand("kill TaiJiOPCSim.exe"),
+      "upgrading Ident without OPCSim installed does not kill TaiJiOPCSim.exe")
 
 -- Upgrading only WinPy313 pauses what loads it: the installed data collector's service and its
 -- Python launchers, and pySim.exe. The collector service starts again; PYSim's OPC server does not
