@@ -318,10 +318,10 @@ check(selection() == "Common.Runtime,Common.Ident,TaijiSim.OPCSim", "OPCSim need
 scenario({installed = {"Common.Runtime", "TaijiSim.OPCSim"}})
 check(selection() == "Common.Runtime,Common.Ident,TaijiSim.OPCSim", "upgrade of OPCSim adds Ident: " .. selection())
 check(ui.text["comphintlab"] == "", "default upgrade leaves hint empty")
--- An already-installed OPCSim whose CLSID lost AppID (e.g. after a manual -RegServer) gets its
--- AppID/RunAs keys repaired in PostSetup without re-running -RegServer; once AppID is back, an
--- unrelated incremental install leaves a site-configured RunAs untouched; a missing CLSID falls
--- back to -RegServer.
+-- An already-installed OPCSim that was registered without the DCOM identity (an older installer)
+-- gets its AppID/RunAs keys in PostSetup without re-running -RegServer. From then on the AppID key
+-- keeps its RunAs, set or deleted by the site: with the CLSID intact, after a manual -RegServer
+-- that took the AppID value off the CLSID, and when the CLSID is missing and -RegServer runs.
 scenario({installed = {"Common.Runtime", "Common.Ident", "TaijiSim.OPCSim"}, args = {components = "Tool.RUS"}})
 StartSetup()
 check(not hasCommand("kill TaiJiOPCSim.exe"), "unselected OPCSim left running")
@@ -337,12 +337,40 @@ commands = {}
 check(PostSetup() == true, "second post setup with intact AppID")
 check(not hasCommand("-RegServer") and not hasCommand("RunAs=") and registry[opcsimAppId].runas == "Domain\\SiteUser",
       "site DCOM identity preserved when AppID is intact")
-registry[("SOFTWARE\\Classes\\WOW6432Node\\CLSID\\{A48A6241-A024-4F99-B105-5DF8CCEA66BA}"):lower()] = nil
+local opcsimClsid = ("SOFTWARE\\Classes\\WOW6432Node\\CLSID\\{A48A6241-A024-4F99-B105-5DF8CCEA66BA}"):lower()
+local opcsimAppIdValue = "reg SOFTWARE\\Classes\\WOW6432Node\\CLSID\\{A48A6241-A024-4F99-B105-5DF8CCEA66BA}|AppID="
+registry[opcsimClsid] = {}
+commands = {}
+check(PostSetup() == true, "post setup after a manual -RegServer")
+check(not hasCommand("-RegServer") and hasCommand(opcsimAppIdValue), "AppID value back on the CLSID without -RegServer")
+check(not hasCommand("RunAs=") and registry[opcsimAppId].runas == "Domain\\SiteUser",
+      "site DCOM identity preserved after a manual -RegServer")
+registry[opcsimClsid], registry[opcsimAppId].runas = {}, nil
+commands = {}
+check(PostSetup() == true, "post setup after a manual -RegServer, RunAs deleted by the site")
+check(hasCommand(opcsimAppIdValue) and not hasCommand("RunAs=") and registry[opcsimAppId].runas == nil,
+      "deleted RunAs stays deleted")
+registry[opcsimClsid], registry[opcsimAppId].runas = nil, "Domain\\SiteUser"
 commands = {}
 check(PostSetup() == true, "post setup with missing OPCSim CLSID")
+check(hasCommand("-RegServer") and hasCommand(opcsimAppIdValue), "missing CLSID falls back to -RegServer")
+check(not hasCommand("RunAs=") and registry[opcsimAppId].runas == "Domain\\SiteUser",
+      "site DCOM identity preserved when -RegServer runs for a missing CLSID")
+registry[opcsimClsid], registry[opcsimAppId] = nil, nil
+commands = {}
+check(PostSetup() == true, "post setup with missing OPCSim CLSID and AppID key")
 check(hasCommand("-RegServer")
       and hasCommand("reg SOFTWARE\\Classes\\AppID\\{A48A6241-A024-4F99-B105-5DF8CCEA66BA}|RunAs=Interactive User"),
-      "missing CLSID falls back to -RegServer and writes RunAs")
+      "missing CLSID and AppID key: -RegServer, then RunAs written")
+-- Selected again, OPCSim is registered from scratch: -RegServer, and RunAs back to the Interactive User.
+scenario({installed = {"Common.Runtime", "Common.Ident", "TaijiSim.OPCSim"}, args = {components = "TaijiSim.OPCSim"}})
+registry[opcsimClsid] = {appid = "{A48A6241-A024-4F99-B105-5DF8CCEA66BA}"}
+registry[opcsimAppId] = {runas = "Domain\\SiteUser"}
+StartSetup()
+commands = {}
+check(PostSetup() == true, "post setup with OPCSim selected")
+check(hasCommand("-RegServer") and registry[opcsimAppId].runas == "Interactive User",
+      "selected OPCSim registered with the Interactive User identity")
 -- Without OPCSim installed (or when an unselected OPCSim still lacks Common.Ident), Tool.RUS does not touch OPCSim.
 scenario({installed = {"Common.Runtime"}, args = {components = "Tool.RUS"}})
 StartSetup()

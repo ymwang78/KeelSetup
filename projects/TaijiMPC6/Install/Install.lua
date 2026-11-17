@@ -1116,11 +1116,13 @@ local TAIJIOPCSIM_CLSID = "{A48A6241-A024-4F99-B105-5DF8CCEA66BA}"
 -- OPC tools cannot see; as the Interactive User every client shares the one in the console session.
 -- The flip side: with nobody logged on, activation fails. Skipped when TaiJiOPCSim is not installed,
 -- so no COM keys point at a missing exe.
--- When `reinstall` is false (OPCSim is already installed, not selected in this run), skips
--- `-RegServer` (whose modal MessageBox blocks silent installs and whose ForceRemove briefly deletes
--- the CLSID key) unless the CLSID key itself is missing, and only writes the AppID/RunAs values when
--- the CLSID key lacks its AppID value (e.g. after a manual `-RegServer`), preserving any DCOM
--- identity a site customized through dcomcnfg. UnInstall.lua deletes the same keys.
+-- When `reinstall` is false (OPCSim is already installed, not selected in this run), this only
+-- repairs. `-RegServer` (whose modal MessageBox blocks silent installs and whose ForceRemove briefly
+-- deletes the CLSID key) runs only if the CLSID key itself is missing, and the CLSID key gets its
+-- AppID value back if it lost it (e.g. after a manual `-RegServer`, which recreates the CLSID key
+-- and leaves the AppID key alone). An AppID key that is already there keeps its RunAs, set or
+-- deleted: it is the identity an earlier install wrote or the one a site chose through dcomcnfg.
+-- UnInstall.lua deletes the same keys.
 function RegisterTaiJiOPCSim(reinstall)
     local exe = _dirCompany .. "\\TaiJiOPCSim\\bin\\TaiJiOPCSim.exe"
     if not installx.FilePathExists(exe) then
@@ -1131,10 +1133,11 @@ function RegisterTaiJiOPCSim(reinstall)
     local clsidKey = "SOFTWARE\\Classes\\WOW6432Node\\CLSID\\" .. TAIJIOPCSIM_CLSID
     local appIdKey = "SOFTWARE\\Classes\\AppID\\" .. TAIJIOPCSIM_CLSID
     local clsidExists = installx.RegGetValue(HKLM, clsidKey, "") ~= nil
+    -- Read before anything below is written.
+    local keepIdentity = reinstall == false and installx.RegGetValue(HKLM, appIdKey, "") ~= nil
     if reinstall ~= false or not clsidExists then
         installx.ProcessExecute("\"" .. exe .. "\" -RegServer", false, 10)
-    elseif installx.RegGetValue(HKLM, clsidKey, "AppID") == TAIJIOPCSIM_CLSID
-       and installx.RegGetValue(HKLM, appIdKey, "") ~= nil then
+    elseif keepIdentity and installx.RegGetValue(HKLM, clsidKey, "AppID") == TAIJIOPCSIM_CLSID then
         installx.LogPrint("Skip TaiJiOPCSim registration, AppID already present")
         return
     end
@@ -1144,8 +1147,12 @@ function RegisterTaiJiOPCSim(reinstall)
     installx.RegSetValue(HKLM, clsidKey .. "\\Implemented Categories\\{63D5F430-CFE4-11d1-B2C8-0060083BA1FB}", "", "")
     installx.RegSetValue(HKLM, clsidKey .. "\\Implemented Categories\\{63D5F432-CFE4-11d1-B2C8-0060083BA1FB}", "", "")
     installx.RegSetValue(HKLM, clsidKey, "AppID", TAIJIOPCSIM_CLSID)
-    installx.RegSetValue(HKLM, appIdKey, "", "TaiJiOPCSim")
-    installx.RegSetValue(HKLM, appIdKey, "RunAs", "Interactive User")
+    if keepIdentity then
+        installx.LogPrint("Keep the DCOM identity of TaiJiOPCSim, AppID key already present")
+    else
+        installx.RegSetValue(HKLM, appIdKey, "", "TaiJiOPCSim")
+        installx.RegSetValue(HKLM, appIdKey, "RunAs", "Interactive User")
+    end
     installx.RegSetValue(HKLM, "SOFTWARE\\Classes\\AppID\\TaiJiOPCSim.exe", "AppID", TAIJIOPCSIM_CLSID)
 end
 
