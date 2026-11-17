@@ -169,9 +169,9 @@ local plan = ComponentPlan()
 check(#plan == 10 and plan[1].res == 152 and plan[2].res == 170 and plan[#plan].res == 171, "biggest first")
 
 -- Deselecting the Common group keeps the required runtime and takes what needs the deselected
--- Python and identification components with it: HostVM, the data collector and PYSim.
+-- Python and identification components with it: HostVM, the data collector, OPCSim and PYSim.
 OnSelChanged("grp_Common", false)
-check(selection() == "Common.Runtime,TaijiMPC.TaijiMPC6,DataService.Svr,TaijiSim.OPCSim,Tool.RUS",
+check(selection() == "Common.Runtime,TaijiMPC.TaijiMPC6,DataService.Svr,Tool.RUS",
       "common off: " .. selection())
 check(ComponentGroupState("Common") == "partial" and ComponentGroupState("TaijiMPC") == "partial", "partial states")
 check(ui.selected["grp_Common"] == false and ui.attributes["grp_Common.foreimage"] ~= "", "partial checkbox drawn")
@@ -186,7 +186,8 @@ check(ui.text["comphintlab"]:find("Python 3.13", 1, true) ~= nil, "hint names th
 OnSelChanged("item_Common_Runtime", false)
 check(ComponentSelected("Common.Runtime") and ui.selected["item_Common_Runtime"] == true, "runtime stays")
 -- A group click on a partial group fills it, on a full group clears it.
-check(ComponentGroupState("TaijiSim") == "partial", "PYSim left with Python")
+OnSelChanged("item_TaijiSim_OPCSim", true)
+check(ComponentGroupState("TaijiSim") == "partial", "PYSim left unselected")
 OnSelChanged("grp_TaijiSim", true)
 check(ComponentGroupState("TaijiSim") == "all", "partial group filled")
 OnSelChanged("grp_TaijiSim", false)
@@ -303,9 +304,17 @@ for index, command in ipairs(commands) do
     if command:find("reg Software\\TaijiControl\\PythonEnv|InstallPath=", 1, true) then last = index end
 end
 check(last > position("install_python_env.bat"), "PythonEnv restored after install_python_env.bat")
--- PYSim's pySim.exe is a launcher of pySim.py as well.
+-- PYSim's pySim.exe is a launcher of pySim.py as well; OPCSim loads MIMO.ini through Common\Lib (Common.Ident).
 scenario({args = {components = "TaijiSim.PYSim"}})
 check(selection() == "Common.Runtime,Common.WinPy313,TaijiSim.PYSim", "PYSim needs Python: " .. selection())
+scenario({args = {components = "TaijiSim.OPCSim"}})
+check(selection() == "Common.Runtime,Common.Ident,TaijiSim.OPCSim", "OPCSim needs Ident: " .. selection())
+-- An already installed OPCSim gets its AppID/RunAs registration repaired in PostSetup even when not re-selected.
+scenario({installed = {"Common.Runtime", "Common.Ident", "TaijiSim.OPCSim"}, args = {components = "Tool.RUS"}})
+StartSetup()
+commands = {}
+check(PostSetup() == true, "post setup with installed OPCSim")
+check(hasCommand("-RegServer"), "installed OPCSim re-registered in PostSetup")
 
 -- Upgrading only WinPy313 pauses what loads it: the installed data collector's service and its
 -- Python launchers, and pySim.exe. The collector service starts again; PYSim's OPC server does not

@@ -122,7 +122,10 @@ local COMPONENTS = {
           desc = {"TaiJiDataCollector 采集服务", "TaiJiDataCollector service"} },
     }},
     { id = "TaijiSim", name = {"TaijiSim", "TaijiSim"}, items = {
-        { id = "OPCSim", res = 180, marker = "TaiJiOPCSim\\bin\\TaiJiOPCSim.exe",
+        -- TaiJiOPCSim.exe loads MIMO.ini through tjutility.dll (mlfC2dm2), which depends on the
+        -- 32-bit MATLAB 6.5 runtime DLLs (libmx.dll, libmat.dll, libmatlb.dll) in Common\Lib
+        -- shipped by Common.Ident.
+        { id = "OPCSim", res = 180, marker = "TaiJiOPCSim\\bin\\TaiJiOPCSim.exe", deps = {"Common.Ident"},
           name = {"OPC 仿真 OPCSim", "OPC simulator"},
           desc = {"TaiJiOPCSim，32 位 OPC DA 仿真服务器", "TaiJiOPCSim, a 32-bit OPC DA simulation server"} },
         -- The OPC server taiji-opcsim-server.exe is self-contained, but pySim.exe, which runs the
@@ -1226,7 +1229,7 @@ function PostSetup()
     InstallOpcCoreComponents(ComponentSelected("TaijiSim.OPCSim") or ComponentSelected("TaijiSim.PYSim") or hostvm, hostvm)
 
 	Progress(96)
-    if ComponentSelected("TaijiSim.OPCSim") then
+    if ComponentPresent("TaijiSim.OPCSim") then
         RegisterTaiJiOPCSim()
     end
     -- The Envelope-protected tjonlinelib DLLs of the identification worker need the run-time.
