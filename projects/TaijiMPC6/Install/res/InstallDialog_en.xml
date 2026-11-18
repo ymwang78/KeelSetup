@@ -57,7 +57,6 @@
 						<Option name="item_DataService_Client" text="Client" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
 						<Control height="4" />
 						<Option name="grp_TaijiSim" text="TaijiSim" font="1" height="20" textcolor="#FF333333" />
-						<Option name="item_TaijiSim_OPCSim" text="OPCSim" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
 						<Option name="item_TaijiSim_PYSim" text="PYSim" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
 						<Control height="4" />
 						<Option name="grp_Tool" text="Tool" font="1" height="20" textcolor="#FF333333" />
