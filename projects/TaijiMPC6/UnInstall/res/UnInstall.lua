@@ -129,7 +129,7 @@ function PreSetup()
     runUninstallBatch(_dirCompany .. "\\HostVM\\uninstall_python_env.bat", 10)
 
     -- 6. Remove TaiJiOPCSim's COM class (32-bit view) and its DCOM identity (AppID keys, shared by
-    --    both views), written by RegisterTaiJiOPCSim() in Install.lua.
+    --    both views), written by earlier TaiJiMPC6 installers before OPCSim was retired (#17).
     installx.RegDeleteKey(HRootKey.HKEY_LOCAL_MACHINE,
         "SOFTWARE\\Classes\\WOW6432Node\\CLSID", "{A48A6241-A024-4f99-B105-5DF8CCEA66BA}")
     installx.RegDeleteKey(HRootKey.HKEY_LOCAL_MACHINE,
