@@ -5,14 +5,14 @@
 local ROOT = "C:\\Test path\\中文"
 local MB = 1024 * 1024
 local SIZES = {[150] = 27, [151] = 68, [152] = 925, [160] = 73, [161] = 84,
-               [170] = 235, [171] = 1, [180] = 8, [181] = 31, [190] = 18}
+               [170] = 235, [171] = 1, [181] = 31, [190] = 18}
 -- The marker directory of each item under ROOT (an installed item has it).
 local MARKERS = {
     ["Common.Runtime"] = "Common\\vcredist", ["Common.Ident"] = "Common\\Ident32",
     ["Common.WinPy313"] = "WinPy313", ["TaijiMPC.HostVM"] = "HostVM",
     ["TaijiMPC.TaijiMPC6"] = "TaiJiMPC6", ["DataService.Svr"] = "TaiJiDataSvc",
-    ["DataService.Client"] = "TaiJiDataClient", ["TaijiSim.OPCSim"] = "TaiJiOPCSim",
-    ["TaijiSim.PYSim"] = "TaiJiPYSim", ["Tool.RUS"] = "Tools",
+    ["DataService.Client"] = "TaiJiDataClient", ["TaijiSim.PYSim"] = "TaiJiPYSim",
+    ["Tool.RUS"] = "Tools",
 }
 local SYSTEM = "C:\\Windows\\System32"
 
@@ -141,7 +141,7 @@ local function check(condition, label)
 end
 
 local ALL = {"Common.Runtime", "Common.Ident", "Common.WinPy313", "TaijiMPC.HostVM", "TaijiMPC.TaijiMPC6",
-             "DataService.Svr", "DataService.Client", "TaijiSim.OPCSim", "TaijiSim.PYSim", "Tool.RUS"}
+             "DataService.Svr", "DataService.Client", "TaijiSim.PYSim", "Tool.RUS"}
 local function selection()
     local list = {}
     for _, key in ipairs(ALL) do
@@ -166,12 +166,12 @@ end
 check(ui.enabled["item_Common_Runtime"] == false and ui.selected["item_Common_Runtime"] == true, "runtime locked")
 check(ui.text["item_Common_WinPy313"]:find("925 MB", 1, true) ~= nil, "size in label: " .. ui.text["item_Common_WinPy313"])
 local plan = ComponentPlan()
-check(#plan == 10 and plan[1].res == 152 and plan[2].res == 170 and plan[#plan].res == 171, "biggest first")
+check(#plan == 9 and plan[1].res == 152 and plan[2].res == 170 and plan[#plan].res == 171, "biggest first")
 
 -- Deselecting the Common group keeps the required runtime and takes what needs the deselected
 -- Python and identification components with it: HostVM, the data collector and PYSim.
 OnSelChanged("grp_Common", false)
-check(selection() == "Common.Runtime,TaijiMPC.TaijiMPC6,DataService.Svr,TaijiSim.OPCSim,Tool.RUS",
+check(selection() == "Common.Runtime,TaijiMPC.TaijiMPC6,DataService.Svr,Tool.RUS",
       "common off: " .. selection())
 check(ComponentGroupState("Common") == "partial" and ComponentGroupState("TaijiMPC") == "partial", "partial states")
 check(ui.selected["grp_Common"] == false and ui.attributes["grp_Common.foreimage"] ~= "", "partial checkbox drawn")
@@ -185,15 +185,15 @@ check(ui.text["comphintlab"]:find("Python 3.13", 1, true) ~= nil, "hint names th
 -- The required runtime cannot be deselected.
 OnSelChanged("item_Common_Runtime", false)
 check(ComponentSelected("Common.Runtime") and ui.selected["item_Common_Runtime"] == true, "runtime stays")
--- A group click on a partial group fills it, on a full group clears it.
-check(ComponentGroupState("TaijiSim") == "partial", "PYSim left with Python")
+-- A group click on a partial or empty group fills it, on a full group clears it.
+check(ComponentGroupState("TaijiSim") == "none", "PYSim left with Python")
 OnSelChanged("grp_TaijiSim", true)
-check(ComponentGroupState("TaijiSim") == "all", "partial group filled")
+check(ComponentGroupState("TaijiSim") == "all" and ComponentSelected("TaijiSim.PYSim"), "group filled")
 OnSelChanged("grp_TaijiSim", false)
-check(not ComponentSelected("TaijiSim.OPCSim") and not ComponentSelected("TaijiSim.PYSim"), "group off")
+check(not ComponentSelected("TaijiSim.PYSim"), "group off")
 check(ui.selected["grp_TaijiSim"] == false and ui.attributes["grp_TaijiSim.foreimage"] == "", "empty group")
 OnSelChanged("grp_TaijiSim", true)
-check(ComponentSelected("TaijiSim.OPCSim") and ComponentSelected("TaijiSim.PYSim"), "group on")
+check(ComponentSelected("TaijiSim.PYSim"), "group on")
 
 -- Upgrade: only the installed components are selected. An installed TaiJiDataSvc keeps its database:
 -- never selected, its checkbox disabled. Deselecting the installed Python keeps HostVM.
@@ -222,10 +222,20 @@ scenario({args = {components = "TaijiMPC, dataservice.client"}})
 check(selection() == "Common.Runtime,Common.Ident,Common.WinPy313,TaijiMPC.HostVM,TaijiMPC.TaijiMPC6,DataService.Client",
       "/components: " .. selection())
 -- An unknown name stops a silent install instead of leaving it waiting.
-scenario({args = {components = "TaijiSim.OPCSim,Nonsense", s = true}})
+scenario({args = {components = "TaijiSim.PYSim,Nonsense", s = true}})
 check(#errors == 1 and errors[1]:find("Nonsense", 1, true), "unknown name reported")
 StartSetup()
 check(failed ~= nil and unzipped == nil, "silent install refused")
+-- Retired TaijiSim.OPCSim (or OPCSim) prompts the user to use PySim (TaijiSim.PYSim) instead.
+scenario({args = {components = "TaijiSim.OPCSim", s = true}})
+check(#errors == 1 and errors[1]:find("PySim (TaijiSim.PYSim)", 1, true) ~= nil,
+      "retired OPCSim prompts replacement: " .. tostring(errors[1]))
+StartSetup()
+check(failed ~= nil and failed:find("PySim (TaijiSim.PYSim)", 1, true) ~= nil and unzipped == nil,
+      "silent install refused for retired OPCSim")
+scenario({args = {components = "OPCSim", s = true}})
+check(#errors == 1 and errors[1]:find("PySim (TaijiSim.PYSim)", 1, true) ~= nil,
+      "retired OPCSim short name prompts replacement: " .. tostring(errors[1]))
 -- A bare runtime is no installation.
 scenario({args = {components = "Common.Runtime"}})
 StartSetup()
@@ -233,24 +243,23 @@ check(unzipped == nil and #errors == 1, "nothing selected refused")
 
 -- StartSetup extracts the selected archives, biggest first, and stops only what they hold open.
 scenario({installed = {"Common.Runtime", "Common.WinPy313", "Common.Ident", "TaijiMPC.HostVM", "TaijiMPC.TaijiMPC6"},
-          services = {"HostVM"}, args = {components = "Common.WinPy313,TaijiSim.OPCSim"}})
+          services = {"HostVM"}, args = {components = "Common.WinPy313,TaijiSim.PYSim"}})
 StartSetup()
-check(table.concat(unzipped, ",") == "152,150,180", "archives: " .. table.concat(unzipped, ","))
+check(table.concat(unzipped, ",") == "152,181,150", "archives: " .. table.concat(unzipped, ","))
 check(hasCommand("service stop HostVM") and not hasCommand("service remove HostVM"), "HostVM only stopped")
-check(hasCommand("kill TaiJiOPCSim.exe") and not hasCommand("kill TaiJiMPC.exe"), "client left running")
+check(hasCommand("kill pySim.exe") and not hasCommand("kill TaiJiMPC.exe"), "client left running")
 -- Progress runs by unpacked bytes over the three archives.
-OnUnzipProgress(152, 10, 0, 925 * MB, 480 * MB)
-check(ui.percent == 5 + math.floor(87 * 480 / 960), "progress " .. tostring(ui.percent))
-OnUnzipProgress(150, 10, 0, 27 * MB, 480 * MB)
+OnUnzipProgress(152, 10, 0, 925 * MB, 491 * MB)
+check(ui.percent == 5 + math.floor(87 * 491 / 983), "progress " .. tostring(ui.percent))
+OnUnzipProgress(150, 10, 0, 27 * MB, 492 * MB)
 check(ui.percent == 92, "progress end " .. tostring(ui.percent))
 commands = {}
 check(PostSetup() == true, "post setup")
 check(hasCommand("service start HostVM") and not hasCommand("service install HostVM"), "HostVM restarted, not reinstalled")
 check(hasCommand("GBDA_Install_Prereq_x86.msi") and not hasCommand("GBDA_Install_Prereq_x64.msi"), "OPC x86 only")
-check(not hasCommand("-RegServer"), "no TaiJiOPCSim.exe on disk yet in this test, so nothing registered")
 check(not hasCommand("haspdinst.exe") and not hasCommand("shortcut "), "no HASP, no shortcuts")
 local components = registry[("Software\\TaijiControl\\TaiJiMPC6\\Components"):lower()]
-check(components["common.winpy313"] and components["taijisim.opcsim"] and components["common.runtime"]
+check(components["common.winpy313"] and components["taijisim.pysim"] and components["common.runtime"]
       and components["taijimpc.hostvm"] == nil, "components recorded")
 local uninstall = registry[("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TaiJiMPC6"):lower()]
 check(uninstall.uninstallstring == ROOT .. "\\Uninstall\\UnInstall.exe", "uninstaller path")

@@ -34,6 +34,7 @@ local _strResourceCN = {
 	NOTHING_SELECTED = "请至少选择一个组件",
 	UNKNOWN_COMPONENT = "未知组件: ",
 	UNAVAILABLE_COMPONENT = "本安装包无法安装的组件: ",
+	OPCSIM_REMOVED = "TaijiSim.OPCSim 已移除，请改用 PySim (TaijiSim.PYSim)",
 	HINT_ADDED = "已同时选择 %s（%s 需要）",
 	HINT_REMOVED = "已同时取消 %s（它需要 %s）",
 	HINT_MISSING = "无法选择 %s：安装包不含 %s",
@@ -61,6 +62,7 @@ local _strResourceEN = {
 	NOTHING_SELECTED = "Select at least one component",
 	UNKNOWN_COMPONENT = "Unknown component: ",
 	UNAVAILABLE_COMPONENT = "Components this installer cannot install: ",
+	OPCSIM_REMOVED = "TaijiSim.OPCSim has been removed; please use PySim (TaijiSim.PYSim) instead",
 	HINT_ADDED = "Also selected %s (needed by %s)",
 	HINT_REMOVED = "Also deselected %s (it needs %s)",
 	HINT_MISSING = "Cannot select %s: this installer lacks %s",
@@ -90,7 +92,7 @@ end
 --   marker           path under the install root that exists once the item is installed
 --   keepIfInstalled  never extracted over an existing installation (TaiJiDataSvc keeps its database)
 -- An item whose archive this installer does not carry (installx.PackageInfo returns nil) is hidden.
--- /components=<list> on the command line selects groups ("TaijiMPC") and items ("TaijiSim.OPCSim").
+-- /components=<list> on the command line selects groups ("TaijiMPC") and items ("TaijiSim.PYSim").
 local COMPONENTS = {
     { id = "Common", name = {"公共组件", "Common"}, items = {
         { id = "Runtime", res = 150, required = true, marker = "Common\\vcredist",
@@ -122,9 +124,6 @@ local COMPONENTS = {
           desc = {"TaiJiDataCollector 采集服务", "TaiJiDataCollector service"} },
     }},
     { id = "TaijiSim", name = {"TaijiSim", "TaijiSim"}, items = {
-        { id = "OPCSim", res = 180, marker = "TaiJiOPCSim\\bin\\TaiJiOPCSim.exe",
-          name = {"OPC 仿真 OPCSim", "OPC simulator"},
-          desc = {"TaiJiOPCSim，32 位 OPC DA 仿真服务器", "TaiJiOPCSim, a 32-bit OPC DA simulation server"} },
         -- The OPC server taiji-opcsim-server.exe is self-contained, but pySim.exe, which runs the
         -- simulation model, is a pySim.py launcher like DataCollector.exe.
         { id = "PYSim", res = 181, marker = "TaiJiPYSim\\opcserver_win_i386\\taiji-opcsim-server.exe", deps = {"Common.WinPy313"},
@@ -307,21 +306,29 @@ function ApplyComponentArg(text)
     for _, item in ipairs(_order) do
         if item.info and LockedState(item) == true then _selected[item.key] = true end
     end
-    local unknown, unavailable = {}, {}
+    local unknown, unavailable, removed = {}, {}, {}
+    local opcsimReported = false
     for token in tostring(text):gmatch("[^,;%s]+") do
         local wanted = token:lower()
-        local found = false
-        for _, item in ipairs(_order) do
-            if item.group.id:lower() == wanted or item.key:lower() == wanted then
-                found = true
-                if not SelectComponent(item.key, true) and not _installed[item.key] then
-                    table.insert(unavailable, item.key)
+        if wanted == "taijisim.opcsim" or wanted == "opcsim" then
+            if not opcsimReported then
+                opcsimReported = true
+                table.insert(removed, _strResource.OPCSIM_REMOVED)
+            end
+        else
+            local found = false
+            for _, item in ipairs(_order) do
+                if item.group.id:lower() == wanted or item.key:lower() == wanted then
+                    found = true
+                    if not SelectComponent(item.key, true) and not _installed[item.key] then
+                        table.insert(unavailable, item.key)
+                    end
                 end
             end
+            if not found then table.insert(unknown, token) end
         end
-        if not found then table.insert(unknown, token) end
     end
-    return unknown, unavailable
+    return unknown, unavailable, removed
 end
 
 -- Selects the missing dependencies of every selected item again, or deselects an item whose
@@ -527,8 +534,11 @@ function OnInitialize()
 	LoadComponents()
 	local arg = installx.SysGetArg("components")
 	if type(arg) == "string" then
-		local unknown, unavailable = ApplyComponentArg(arg)
+		local unknown, unavailable, removed = ApplyComponentArg(arg)
 		local problems = {}
+		for _, msg in ipairs(removed or {}) do
+			table.insert(problems, msg)
+		end
 		if #unknown > 0 then
 			table.insert(problems, _strResource.UNKNOWN_COMPONENT .. table.concat(unknown, ", "))
 		end
@@ -720,10 +730,6 @@ end
 function StopSelectedComponents()
     _restartHostVM = false
     _restartServices = {}
-    if ComponentSelected("TaijiSim.OPCSim") then
-        installx.LogPrint("KillProcesses TaiJiOPCSim.exe ...")
-        installx.ProcessKill("TaiJiOPCSim.exe")
-    end
     if ComponentSelected("TaijiMPC.TaijiMPC6") then
         installx.LogPrint("KillProcesses TaiJiMPC.exe ...")
         installx.ProcessKill("TaiJiMPC.exe")
@@ -1021,7 +1027,7 @@ end
 -- OPC core components come in two Graybox packages, one per bitness, and each carries what the
 -- other lacks:
 --   x86: OpcEnum.exe (the OPC server browser, which only exists as 32-bit) and the 32-bit
---        proxy/stubs. Needed by the 32-bit DA servers TaiJiOPCSim and TaiJiPYSim\opcserver_win_i386,
+--        proxy/stubs. Needed by the 32-bit DA server TaiJiPYSim\opcserver_win_i386,
 --        and by every client that browses servers through OpcEnum.
 --   x64: the 64-bit proxy/stubs only. Needed by HostVM's DA client (libidh, x64) to talk to DA
 --        servers and to the 32-bit OpcEnum.
@@ -1095,36 +1101,6 @@ function InstallOpcCoreComponents(wantX86, wantX64)
     else
         installx.ProcessExecute("\"" .. opcDir .. "GBDA_Install_Prereq_x64.msi\" /quiet")
     end
-end
-
--- TaiJi.OPC.Sim, the 32-bit DA server TaiJiOPCSim.exe. Its CLSID is in the 32-bit registry view;
--- AppID keys are shared by both views, so they are written without WOW6432Node.
-local TAIJIOPCSIM_CLSID = "{A48A6241-A024-4F99-B105-5DF8CCEA66BA}"
-
--- Registers TaiJiOPCSim.exe and runs it as the Interactive User. With the default DCOM identity (the
--- launching user) HostVM, a SYSTEM service, gets its own TaiJiOPCSim.exe in session 0 that desktop
--- OPC tools cannot see; as the Interactive User every client shares the one in the console session.
--- The flip side: with nobody logged on, activation fails. Skipped when TaiJiOPCSim is not installed,
--- so no COM keys point at a missing exe. UnInstall.lua deletes the same keys.
-function RegisterTaiJiOPCSim()
-    local exe = _dirCompany .. "\\TaiJiOPCSim\\bin\\TaiJiOPCSim.exe"
-    if not installx.FilePathExists(exe) then
-        installx.LogPrint("Skip TaiJiOPCSim registration, not installed: " .. exe)
-        return
-    end
-    installx.ProcessExecute("\"" .. exe .. "\" -RegServer", false, 10)
-
-    -- After -RegServer, which writes the CLSID key but no AppID.
-    local HKLM = HRootKey.HKEY_LOCAL_MACHINE
-    local clsidKey = "SOFTWARE\\Classes\\WOW6432Node\\CLSID\\" .. TAIJIOPCSIM_CLSID
-    local appIdKey = "SOFTWARE\\Classes\\AppID\\" .. TAIJIOPCSIM_CLSID
-    installx.RegSetValue(HKLM, clsidKey .. "\\Implemented Categories", "", "")
-    installx.RegSetValue(HKLM, clsidKey .. "\\Implemented Categories\\{63D5F430-CFE4-11d1-B2C8-0060083BA1FB}", "", "")
-    installx.RegSetValue(HKLM, clsidKey .. "\\Implemented Categories\\{63D5F432-CFE4-11d1-B2C8-0060083BA1FB}", "", "")
-    installx.RegSetValue(HKLM, clsidKey, "AppID", TAIJIOPCSIM_CLSID)
-    installx.RegSetValue(HKLM, appIdKey, "", "TaiJiOPCSim")
-    installx.RegSetValue(HKLM, appIdKey, "RunAs", "Interactive User")
-    installx.RegSetValue(HKLM, "SOFTWARE\\Classes\\AppID\\TaiJiOPCSim.exe", "AppID", TAIJIOPCSIM_CLSID)
 end
 
 -- Version of the bundled Common\hasp\haspdinst.exe; change it together with that file. The
@@ -1221,14 +1197,11 @@ function PostSetup()
     end
 
 	Progress(95)
-    -- x86: the 32-bit DA servers, and OpcEnum, which HostVM's libidh also activates to browse the
+    -- x86: the 32-bit DA server, and OpcEnum, which HostVM's libidh also activates to browse the
     -- local DA servers; x64: HostVM's DA client.
-    InstallOpcCoreComponents(ComponentSelected("TaijiSim.OPCSim") or ComponentSelected("TaijiSim.PYSim") or hostvm, hostvm)
+    InstallOpcCoreComponents(ComponentSelected("TaijiSim.PYSim") or hostvm, hostvm)
 
 	Progress(96)
-    if ComponentSelected("TaijiSim.OPCSim") then
-        RegisterTaiJiOPCSim()
-    end
     -- The Envelope-protected tjonlinelib DLLs of the identification worker need the run-time.
     if ComponentSelected("Common.Ident") then
         InstallHaspRuntime()

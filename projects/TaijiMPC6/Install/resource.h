@@ -28,7 +28,6 @@
 #define IDR_PKG_TAIJIMPC_CLIENT         161
 #define IDR_PKG_DATASERVICE_SVR         170
 #define IDR_PKG_DATASERVICE_CLIENT      171
-#define IDR_PKG_TAIJISIM_OPCSIM         180
 #define IDR_PKG_TAIJISIM_PYSIM          181
 #define IDR_PKG_TOOL_RUS                190
 #define IDC_STATIC                      -1

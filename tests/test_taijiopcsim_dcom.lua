@@ -1,6 +1,6 @@
 -- Run from the repository root: lua tests/test_taijiopcsim_dcom.lua
--- The TaijiMPC and TaijiMPC6 Install.lua must leave HKLM as TaiJiOPCSim-InteractiveUser.reg does,
--- and their UnInstall.lua must take it away again.
+-- The TaijiMPC Install.lua must leave HKLM as TaiJiOPCSim-InteractiveUser.reg does,
+-- and its UnInstall.lua (as well as TaijiMPC6's UnInstall.lua for upgrades) must take it away again.
 local CLSID = "{A48A6241-A024-4F99-B105-5DF8CCEA66BA}"
 local EXE = "C:\\TaijiControl\\TaiJiOPCSim\\bin\\TaiJiOPCSim.exe"
 
@@ -58,7 +58,7 @@ local function reset(installed)
 end
 
 local CATEGORIES = "SOFTWARE\\Classes\\WOW6432Node\\CLSID\\" .. CLSID .. "\\Implemented Categories\\"
-local projects = {"TaijiMPC", "TaijiMPC6"}
+local projects = {"TaijiMPC"}
 for _, project in ipairs(projects) do
     RegisterTaiJiOPCSim, PreSetup = nil, nil
     assert(loadfile("projects/" .. project .. "/Install/Install.lua"))()
@@ -82,11 +82,15 @@ for _, project in ipairs(projects) do
     -- CLSID, its Implemented Categories and the two category subkeys, the two AppID keys.
     assert(written == 6, project .. ": unexpected keys written: " .. written)
 
-    -- Uninstall removes every one of them.
-    assert(loadfile("projects/" .. project .. "/UnInstall/res/UnInstall.lua"))()
-    PreSetup()
-    local left = next(registry)
-    assert(left == nil, project .. ": left behind by UnInstall.lua: " .. tostring(left))
+    -- Uninstall removes every one of them (including TaijiMPC6 UnInstall.lua for upgraded machines).
+    for _, uninstProject in ipairs({"TaijiMPC", "TaijiMPC6"}) do
+        reset(true)
+        RegisterTaiJiOPCSim()
+        assert(loadfile("projects/" .. uninstProject .. "/UnInstall/res/UnInstall.lua"))()
+        PreSetup()
+        local left = next(registry)
+        assert(left == nil, uninstProject .. ": left behind by UnInstall.lua: " .. tostring(left))
+    end
 
     -- Not installed: no registration, no keys pointing at a missing exe.
     reset(false)
