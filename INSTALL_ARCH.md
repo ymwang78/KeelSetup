@@ -146,6 +146,7 @@ rootKey 枚举：0=HKCR, 1=HKCU, 2=HKLM, 3=HKU, 4=HKCC
     │               完成后 PostMessage → HandleCustomMessage → PostSetup()
     │
     └─ PostSetup()
+            ├─      装 HostVM 时删掉旧版本留下、新包已经不带的文件（RemoveStaleHostVMFiles()：HostVM\modules\py\zcepy.dll，现在随 zce.dll 放在 HostVM\，旧的那份会先被 py 模块加载；HostVM\zcepy.dll 在时才删，旧布局的包里它是唯一的一份；删不掉就安装失败）
             ├─      System32 没有 icu.dll 时，把 Common\icu 的 icu.dll、icuuc.dll 拷进 TaiJiMPC6\（InstallIcuFallback()；拷不进去且目标不存在就安装失败）；System32 有 icu.dll 时删掉 TaiJiMPC6\icu.dll（以前的后备或手工放的，会盖住系统那份；删不掉就安装失败）
             ├─ 94%  vc_redist.x64.exe /install /quiet /norestart（注册表判断跳过）
             ├─ 94%  GBDA_Install_Prereq_x86.msi（OPC DA，注册表判断跳过）
