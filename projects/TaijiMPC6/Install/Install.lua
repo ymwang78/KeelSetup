@@ -26,6 +26,7 @@ local _strResourceCN = {
 	MKDIR_FAILED = "创建目录失败: ",
 	LOADING = "正在加载",
 	HOSTVM_CONFIG_FAILED = "无法生成 HostVM 配置文件: ",
+	HOSTVM_STALE_FAILED = "无法删除旧版本留下的 HostVM 文件: ",
 	ICU_FAILED = "无法部署 ICU 运行库: ",
 	REQUIRED = "必装",
 	INSTALLED = "已安装",
@@ -54,6 +55,7 @@ local _strResourceEN = {
 	MKDIR_FAILED = "Make dir failed: ",
 	LOADING = "Loading",
 	HOSTVM_CONFIG_FAILED = "Failed to create the HostVM config: ",
+	HOSTVM_STALE_FAILED = "Failed to delete a HostVM file left by an earlier version: ",
 	ICU_FAILED = "Failed to deploy the ICU runtime: ",
 	REQUIRED = "required",
 	INSTALLED = "installed",
@@ -1024,6 +1026,36 @@ function InstallIcuFallback()
     return true
 end
 
+-- Files that earlier HostVM.7z archives carried and the current one no longer does. Unzipping over
+-- an earlier install leaves them behind, and some would be loaded ahead of their replacement:
+-- zcepy.dll moved from HostVM\modules\py\ to HostVM\, next to zce.dll (ymwang78/KeelHost#81), and
+-- the worker loading the py module searches the module's own directory first
+-- (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR), so the old copy, built for another zce.dll, would win.
+-- Each file goes only once its replacement is there: a HostVM.7z still in the old layout carries
+-- the stale path as its only copy. Paths are relative to HostVM\.
+local STALE_HOSTVM_FILES = {
+    {stale = "modules\\py\\zcepy.dll", replacement = "zcepy.dll"},
+}
+-- Run after HostVM.7z was unzipped and before the HostVM service starts. Returns false when one of
+-- them cannot be deleted, after showing the error.
+function RemoveStaleHostVMFiles()
+    local hostvmDir = _dirCompany .. "\\HostVM\\"
+    for _, file in ipairs(STALE_HOSTVM_FILES) do
+        local path = hostvmDir .. file.stale
+        if installx.FilePathExists(path) then
+            if not installx.FilePathExists(hostvmDir .. file.replacement) then
+                installx.LogPrint("Keep " .. path .. ": this HostVM has no " .. hostvmDir .. file.replacement)
+            elseif not installx.FilePathDelete(path) then
+                ErrorHint(_strResource.HOSTVM_STALE_FAILED .. path)
+                return false
+            else
+                installx.LogPrint("Removed " .. path .. ", left by an earlier HostVM")
+            end
+        end
+    end
+    return true
+end
+
 -- OPC core components come in two Graybox packages, one per bitness, and each carries what the
 -- other lacks:
 --   x86: OpcEnum.exe (the OPC server browser, which only exists as 32-bit) and the 32-bit
@@ -1180,9 +1212,11 @@ function PostSetup()
     local client = ComponentSelected("TaijiMPC.TaijiMPC6")
     local winpy = ComponentSelected("Common.WinPy313")
 
-    -- Without hostvm.xml the HostVM service cannot start. Checking it first means a failure stops
-    -- before any runtime, service, registry or shortcut is touched.
-    if hostvm and (not InstallHostVMConfig() or not InstallHostVMFragments()) then
+    -- Without hostvm.xml the HostVM service cannot start, and a stale DLL left by an earlier version
+    -- would break its py workers. Checking them first means a failure stops before any runtime,
+    -- service, registry or shortcut is touched.
+    if hostvm and (not InstallHostVMConfig() or not InstallHostVMFragments()
+                   or not RemoveStaleHostVMFiles()) then
         return false
     end
     -- Likewise for the client, which cannot start without ICU.
