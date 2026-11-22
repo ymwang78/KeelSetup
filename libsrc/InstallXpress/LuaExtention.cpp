@@ -5,6 +5,7 @@
 #include "Utility/TypeConvertUtil.h"
 #include "LuaExtention.h"
 #include "HostVMConfig.h"
+#include "RegistryValue.h"
 #include <ShlObj_core.h>
 #include <sstream>
 #include <iostream>
@@ -957,32 +958,22 @@ static int l_RunAsAdmin(lua_State * L)
 }
 
 
-// Pushes value `name` of an open key: REG_DWORD as an integer, REG_SZ as a string, anything else
-// (including a missing value) as nil. An empty name reads the key's default value.
+// Pushes value `name` of an open key: REG_DWORD as an integer, REG_SZ and REG_EXPAND_SZ (unexpanded)
+// as a string of any length, anything else (including a missing value) as nil. An empty name reads
+// the key's default value. See readRegistryValue() in RegistryValue.h.
 static void PushRegistryValue(lua_State* L, HKEY hKey, const std::wstring& name)
 {
-    DWORD lValueType = 0;
-    // One spare wchar_t that RegQueryValueEx never writes keeps an unterminated REG_SZ terminated.
-    unsigned char data[1024 + sizeof(wchar_t)] = { 0 };
-    DWORD dataSize = 1024;
-    if (RegQueryValueEx(hKey, name.c_str(), NULL, &lValueType, (LPBYTE)&data, &dataSize) != ERROR_SUCCESS) {
-        lua_pushnil(L);
-        return;
-    }
-
-    switch (lValueType) {
-    case REG_DWORD: {
-        lua_pushinteger(L, *(DWORD*)data);
+    RegistryValue value = readRegistryValue(hKey, name);
+    switch (value.kind) {
+    case RegistryValue::Number:
+        lua_pushinteger(L, value.number);
         break;
-    }
-    case REG_SZ: {
-        lua_pushstring(L, UnicodeToUtf8((wchar_t*)data).c_str());
+    case RegistryValue::String:
+        lua_pushstring(L, UnicodeToUtf8(value.text).c_str());
         break;
-    }
-    default: {
+    default:
         lua_pushnil(L);
         break;
-    }
     }
 }
 
@@ -1075,14 +1066,17 @@ static int l_RegSetValue(lua_State* L)
 
     HKEY hKey;
 
-    if (RegCreateKeyEx(hKeyRoot, Utf82Unicode(path).c_str(), 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) != ERROR_SUCCESS) {
+    // KEY_READ too: a string value keeps the type it already has (writeRegistryString()).
+    if (RegCreateKeyEx(hKeyRoot, Utf82Unicode(path).c_str(), 0, NULL, REG_OPTION_NON_VOLATILE, KEY_READ | KEY_WRITE, NULL, &hKey, NULL) != ERROR_SUCCESS) {
         lua_pushboolean(L, 0);
         return 1;
     }
 
+    // An integer is a REG_DWORD; a string a REG_SZ, or REG_EXPAND_SZ when the value already is one
+    // (the system PATH).
     if (lua_isinteger(L, 4)) {
         DWORD value = (DWORD)lua_tointeger(L, 4);
-        if (RegSetValueEx(hKey, Utf82Unicode(key).c_str(), 0, REG_SZ, (const BYTE*)value, sizeof(DWORD)) != ERROR_SUCCESS) {
+        if (writeRegistryDword(hKey, Utf82Unicode(key), value) != ERROR_SUCCESS) {
             RegCloseKey(hKey);
             lua_pushboolean(L, 0);
             return 1;
@@ -1090,7 +1084,7 @@ static int l_RegSetValue(lua_State* L)
     }
     else if (lua_isstring(L, 4)) {
         std::wstring value = Utf82Unicode( lua_tostring(L, 4));
-        if (RegSetValueEx(hKey, Utf82Unicode(key).c_str(), 0, REG_SZ, (const BYTE*)value.c_str(), value.size() * 2) != ERROR_SUCCESS) {
+        if (writeRegistryString(hKey, Utf82Unicode(key), value) != ERROR_SUCCESS) {
             RegCloseKey(hKey);
             lua_pushboolean(L, 0);
             return 1;
