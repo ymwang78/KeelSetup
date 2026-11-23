@@ -29,7 +29,7 @@ local _strResourceCN = {
 	SPACE_HINT = "安装位置空间不足：需要约 %s，可用 %s，请另外选择安装位置",
 	SPACE_LABEL = "所需空间约 %s，可用 %s",
 	BAD_PATH = "安装路径必须是本机磁盘上的绝对路径: ",
-	UNSAFE_PATH = "无法安全地使用安装目录（%s，错误 %s）：路径上或目录里有链接点，或目录不是管理员创建的。请换一个目录，或删除后重试",
+	UNSAFE_PATH = "无法安全地使用安装目录（%s，错误 %s）：路径上或目录里有链接点，或者目录、或目录里的文件是其他用户创建的。请检查并删除它，或换一个目录",
 	LOADING = "正在加载",
 	HOSTVM_CONFIG_FAILED = "无法生成 HostVM 配置文件: ",
 	HOSTVM_STALE_FAILED = "无法删除旧版本留下的 HostVM 文件: ",
@@ -59,7 +59,7 @@ local _strResourceEN = {
 	SPACE_HINT = "Not enough space at the install path: needs about %s, %s free. Please choose another install path",
 	SPACE_LABEL = "Needs about %s, %s free",
 	BAD_PATH = "The install path must be an absolute path on a local drive: ",
-	UNSAFE_PATH = "Cannot use the install path safely (%s, error %s): a junction or link is on the way or inside, or another user created the directory. Choose another path, or delete it and retry",
+	UNSAFE_PATH = "Cannot use the install path safely (%s, error %s): a junction or link is on the way or inside, or another user created the directory or a file in it. Check and delete it, or choose another path",
 	LOADING = "Loading",
 	HOSTVM_CONFIG_FAILED = "Failed to create the HostVM config: ",
 	HOSTVM_STALE_FAILED = "Failed to delete a HostVM file left by an earlier version: ",
@@ -110,7 +110,8 @@ end
 --   keepIfInstalled  never extracted over an existing installation (TaiJiDataSvc keeps its database)
 --   dirs             directories under the install root its archive fills; SecureInstallDirectories
 --                    lets only SYSTEM and Administrators change them, Users may read
---   privateDirs      the same without any access for Users: they hold secrets
+--   privateSubdirs   {[dir] = {names}}: directories directly below one of dirs that give Users no
+--                    access at all, at no point: they hold secrets
 -- An item whose archive this installer does not carry (installx.PackageInfo returns nil) is hidden.
 -- /components=<list> on the command line selects groups ("TaijiMPC") and items ("TaijiSim.PYSim").
 local COMPONENTS = {
@@ -128,7 +129,7 @@ local COMPONENTS = {
     { id = "TaijiMPC", name = {"TaijiMPC", "TaijiMPC"}, items = {
         -- hostvm.d\100-tjsysid.xml (and its template) carries the identification secret key.
         { id = "HostVM", res = 160, marker = "HostVM\\HostVM.exe", deps = {"Common.WinPy313", "Common.Ident"},
-          dirs = {"HostVM"}, privateDirs = {"HostVM\\hostvm.d"},
+          dirs = {"HostVM"}, privateSubdirs = {HostVM = {"hostvm.d"}},
           name = {"HostVM 服务", "HostVM service"},
           desc = {"后台服务，运行 MPC 算法与辨识", "Background service running MPC and identification"} },
         -- Spelled as in the archive, which creates the directory when it is not there.
@@ -139,7 +140,7 @@ local COMPONENTS = {
     { id = "DataService", name = {"DataService", "DataService"}, items = {
         -- data\ is the PostgreSQL cluster (password hashes, pg_hba.conf); PostgreSQL runs as SYSTEM.
         { id = "Svr", res = 170, marker = "TaiJiDataSvc", keepIfInstalled = true,
-          dirs = {"TaiJiDataSvc"}, privateDirs = {"TaiJiDataSvc\\data"},
+          dirs = {"TaiJiDataSvc"}, privateSubdirs = {TaiJiDataSvc = {"data"}},
           name = {"数据服务 Svr", "Data server"},
           desc = {"TaiJiDataSvc 数据库服务（PostgreSQL）", "TaiJiDataSvc database service (PostgreSQL)"} },
         -- DataCollector.exe (like DataViewer.exe and tsdbAdmin.exe) only launches its .py: it loads
@@ -842,8 +843,10 @@ end
 -- folders and files, inherited by every new folder, so any user could otherwise add a HostVM module,
 -- a hostvm.d fragment, a Python module or a DLL next to one of them and have it run with those
 -- rights. installx.FilePathSecure creates a directory as needed, refuses a junction on the way or
--- inside and a directory another user owns, and gives the tree Administrators as owner and a
--- protected DACL: SYSTEM and Administrators full control, Users read & execute or nothing.
+-- inside, a directory another user owns and, in an existing directory, any file or directory
+-- another user owns (one planted while it had C:\'s DACL), and gives the tree Administrators as
+-- owner and a protected DACL: SYSTEM and Administrators full control, Users read & execute, or no
+-- access in the private subdirectories, which Users can read at no point.
 --
 -- Only the components' own directories are secured, never the whole install root: other products
 -- live there too (KeelBase's C:\TaijiControl\KeelBase keeps Users out of its Data\), and resetting the
@@ -932,27 +935,39 @@ function SecureInstallDirectories()
             return false, problem, code
         end
     end
-    -- Readable ones first: securing a directory resets everything below it, a private one too.
-    local readable, private, seen = {}, {}, {}
+    -- Each directory once (two items fill Common\), with the private subdirectories of every item.
+    local dirs, private = {}, {}
     for _, item in ipairs(_order) do
         if ComponentPresent(item.key) then
-            for _, list in ipairs({{item.dirs, readable}, {item.privateDirs, private}}) do
-                for _, dir in ipairs(list[1] or {}) do
-                    if not seen[dir:lower()] then
-                        seen[dir:lower()] = true
-                        table.insert(list[2], dir)
-                    end
+            for _, dir in ipairs(item.dirs or {}) do
+                local key = dir:lower()
+                if private[key] == nil then
+                    private[key] = {}
+                    table.insert(dirs, dir)
+                end
+                for _, name in ipairs((item.privateSubdirs or {})[dir] or {}) do
+                    table.insert(private[key], name)
                 end
             end
         end
     end
-    for _, list in ipairs({{readable, true}, {private, false}}) do
-        for _, dir in ipairs(list[1]) do
-            local path = _dirCompany .. "\\" .. dir
-            installx.LogPrint("Secure " .. path .. (list[2] and "" or " (no access for Users)") .. " ...")
-            local secured, problem, code = installx.FilePathSecure(path, list[2])
-            if not secured then
-                return false, problem, code
+    for _, dir in ipairs(dirs) do
+        local path = _dirCompany .. "\\" .. dir
+        local names = private[dir:lower()]
+        installx.LogPrint("Secure " .. path .. (#names > 0 and (", no access for Users to " .. table.concat(names, ", ")) or "") .. " ...")
+        local secured, problem, code = installx.FilePathSecure(path, true, names)
+        if not secured then
+            return false, problem, code
+        end
+        -- One that exists got its DACL in that call; one that does not is created now, without
+        -- access for Users, before the archive fills it.
+        for _, name in ipairs(names) do
+            local sub = path .. "\\" .. name
+            if not installx.FilePathExists(sub) then
+                secured, problem, code = installx.FilePathSecure(sub, false)
+                if not secured then
+                    return false, problem, code
+                end
             end
         end
     end

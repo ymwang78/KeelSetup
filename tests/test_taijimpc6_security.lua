@@ -56,9 +56,12 @@ installx = {
         return {size = SIZES[res] * MB, entries = 10}
     end,
     FilePathExists = exists,
-    FilePathSecure = function(path, usersCanRead)
+    -- Recorded as "secure <path>{<private subdirs>}", " private" when Users get no access at all.
+    FilePathSecure = function(path, usersCanRead, privateSubdirs)
         assert(type(usersCanRead) == "boolean", "usersCanRead for " .. path)
-        table.insert(commands, "secure " .. path .. (usersCanRead and "" or " private"))
+        assert(privateSubdirs == nil or type(privateSubdirs) == "table", "privateSubdirs for " .. path)
+        local names = (privateSubdirs and #privateSubdirs > 0) and ("{" .. table.concat(privateSubdirs, ";") .. "}") or ""
+        table.insert(commands, "secure " .. path .. names .. (usersCanRead and "" or " private"))
         if unsafe[lower(path)] then return false, path .. "\\junction", 4395 end
         files[lower(path)] = true
         return true
@@ -203,11 +206,14 @@ local function securedFirst()
     return firstOther == nil or lastSecure < firstOther
 end
 
-local ALL_DIRS = "Common,Uninstall,WinPy313,HostVM,TaijiMPC6,TaiJiDataSvc,TaiJiDataClient,TaiJiPYSim,Tools,"
-    .. "HostVM\\hostvm.d private,TaiJiDataSvc\\data private"
+-- hostvm.d\ and TaiJiDataSvc\data\ are private subdirectories of their component's call, so Users
+-- can read them at no point; one that is not there yet is created by a call of its own, without
+-- access for Users, before the archive fills it.
+local ALL_DIRS = "Common,Uninstall,WinPy313,HostVM{hostvm.d},HostVM\\hostvm.d private,TaijiMPC6,"
+    .. "TaiJiDataSvc{data},TaiJiDataSvc\\data private,TaiJiDataClient,TaiJiPYSim,Tools"
 
 -- A fresh install into a new root secures the root, then every component's directories (Common\
--- once, though two items fill it), then the private ones; all before anything else happens.
+-- once, though two items fill it); all before anything else happens.
 scenario({rootExists = false})
 StartSetup()
 check(secured() == ".," .. ALL_DIRS, "fresh: " .. secured())
@@ -240,8 +246,8 @@ check(unzipDir == "E:", "drive root extracts into E: " .. tostring(unzipDir))
 scenario({installed = {"Common.Runtime", "TaijiMPC.HostVM", "DataService.Svr"}, args = {components = "Tool.RUS"},
           info = {projects_dir = "../MyProjects", metadb_path = "../MyProjects/subvm.db"}})
 StartSetup()
-check(secured() == "Common,Uninstall,HostVM,TaiJiDataSvc,Tools,HostVM\\hostvm.d private,TaiJiDataSvc\\data private,MyProjects",
-      "upgrade: " .. secured())
+-- The existing hostvm.d\ and data\ need no call of their own.
+check(secured() == "Common,Uninstall,HostVM{hostvm.d},TaiJiDataSvc{data},Tools,MyProjects", "upgrade: " .. secured())
 check(securedFirst(), "upgrade secured first")
 commands = {}
 check(PostSetup() == true and secured() == "", "PostSetup secures nothing more: " .. secured())
@@ -266,7 +272,7 @@ local function projectsFor(info)
     StartSetup()
     local list = {}
     for path in secured():gmatch("[^,]+") do
-        if not ({Common = true, Uninstall = true, HostVM = true, Tools = true, ["HostVM\\hostvm.d private"] = true})[path] then
+        if not ({Common = true, Uninstall = true, ["HostVM{hostvm.d}"] = true, Tools = true})[path] then
             table.insert(list, path)
         end
     end
@@ -299,11 +305,16 @@ StartSetup()
 check(failed ~= nil and failed:find(ROOT .. "\\HostVM\\junction", 1, true) ~= nil and failed:find("4395", 1, true) ~= nil,
       "message names it: " .. tostring(failed))
 -- (The upgrade selects HostVM's missing dependencies: WinPy313 comes before it.)
-check(secured() == "Common,Uninstall,WinPy313,HostVM", "nothing secured after the refusal: " .. secured())
+check(secured() == "Common,Uninstall,WinPy313,HostVM{hostvm.d}", "nothing secured after the refusal: " .. secured())
 check(indexOf("kill ") == nil and indexOf("exec ") == nil and unzipped == nil, "nothing stopped or extracted")
 scenario({args = {s = true}, rootExists = false, unsafe = {ROOT}})
 StartSetup()
 check(failed ~= nil and secured() == "." and unzipped == nil, "refused new root")
+-- So does a refused new private subdirectory (another user created it after all).
+scenario({args = {s = true}, rootExists = false, unsafe = {ROOT .. "\\HostVM\\hostvm.d"}})
+StartSetup()
+check(failed ~= nil and failed:find("hostvm.d", 1, true) ~= nil and unzipped == nil
+      and secured() == ".,Common,Uninstall,WinPy313,HostVM{hostvm.d},HostVM\\hostvm.d private", "refused hostvm.d: " .. secured())
 scenario({args = {s = true}, installed = {"Common.Runtime", "TaijiMPC.HostVM"}, unsafe = {ROOT .. "\\TaiJiMPC_Projects"}})
 StartSetup()
 check(failed ~= nil and failed:find("TaiJiMPC_Projects", 1, true) ~= nil and indexOf("--stop HostVM") == nil
