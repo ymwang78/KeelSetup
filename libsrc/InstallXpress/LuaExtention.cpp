@@ -648,6 +648,25 @@ static int l_HostVMSubvmNames(lua_State* L)
     return 1;
 }
 
+// HostVMInfoAttribute(path, name): the attribute of hostvm.xml's hostvm_info element, e.g.
+// projects_dir, as written there; false when the element has no such attribute, nil when the file
+// cannot be read or is not a main config.
+static int l_HostVMInfoAttribute(lua_State* L)
+{
+    std::wstring path = Utf82Unicode(luaL_checkstring(L, 1));
+    std::wstring name = Utf82Unicode(luaL_checkstring(L, 2));
+    std::wstring value;
+    bool found = false;
+    if (!readHostVMInfoAttribute(path, name.c_str(), value, found)) {
+        lua_pushnil(L);
+    } else if (!found) {
+        lua_pushboolean(L, false);
+    } else {
+        lua_pushstring(L, UnicodeToUtf8(value).c_str());
+    }
+    return 1;
+}
+
 // FilePathSecure(path, usersCanRead): makes path (created as needed) a directory only SYSTEM and
 // Administrators can change, for a LocalSystem service to run from; see secureDirectory() in
 // FileSecurity.h. Returns true, or false, the path that made it refuse and a Win32 error code
@@ -1615,6 +1634,7 @@ static const luaL_Reg reglib[] = {
     {"FilePathExists", l_FilePathExists},
     {"FilePathListFiles", l_FilePathListFiles},
     {"HostVMSubvmNames", l_HostVMSubvmNames},
+    {"HostVMInfoAttribute", l_HostVMInfoAttribute},
     {"FilePathCreateDirectory", l_FilePathCreateDirectory},
     {"FilePathSecure", l_FilePathSecure},
     {"FilePathGetSpecialLocation", l_FilePathGetSpecialLocation},
