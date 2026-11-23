@@ -144,6 +144,28 @@ TEST_F(SecureDirectoryFixture, WithoutUsersNobodyElseHasAnEntry) {
     EXPECT_EQ(summary.system, (ACCESS_MASK)FILE_ALL_ACCESS);
 }
 
+// Data\ below an install path that Users may read: it ends up protected without Users, the rest
+// with them; a private name must be a plain name.
+TEST_F(SecureDirectoryFixture, PrivateSubdirectoryGetsNoUsersWhileTheRestDoes) {
+    writeFile(base + L"\\tree\\Data\\kbase01\\kbase_server.json");
+    writeFile(base + L"\\tree\\Host\\KeelHost.exe");
+    setSecurity(base + L"\\tree", L"D:(A;OICI;FA;;;BU)", DACL_SECURITY_INFORMATION);
+    SecureDirectoryResult result = secureDirectory(base + L"\\tree", true, {L"Data"});
+    ASSERT_TRUE(result.ok) << result.error;
+    AceSummary data = summarize(base + L"\\tree\\Data");
+    EXPECT_TRUE(data.isProtected);
+    EXPECT_EQ(data.users, 0u);
+    EXPECT_EQ(summarize(base + L"\\tree\\Data\\kbase01\\kbase_server.json").users, 0u);
+    EXPECT_EQ(summarize(base + L"\\tree\\Host\\KeelHost.exe").users, (ACCESS_MASK)(FILE_GENERIC_READ | FILE_GENERIC_EXECUTE));
+    EXPECT_EQ(summarize(base + L"\\tree").users, (ACCESS_MASK)(FILE_GENERIC_READ | FILE_GENERIC_EXECUTE));
+    EXPECT_TRUE(summarize(base + L"\\tree\\Data\\kbase01\\kbase_server.json").ownerIsAdministrators);
+    for (const wchar_t* name : {L"", L"..", L"Data\\kbase01", L"C:"}) {
+        SecureDirectoryResult bad = secureDirectory(base + L"\\tree", true, {name});
+        EXPECT_FALSE(bad.ok) << name;
+        EXPECT_EQ(bad.error, (DWORD)ERROR_BAD_PATHNAME) << name;
+    }
+}
+
 // A junction on the way would make the installer extract, and start a service, somewhere else.
 TEST_F(SecureDirectoryFixture, JunctionInThePathIsRefusedAndNothingIsCreatedBehindIt) {
     ASSERT_TRUE(CreateDirectoryW((base + L"\\real").c_str(), nullptr));

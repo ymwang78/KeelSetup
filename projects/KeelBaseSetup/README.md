@@ -58,8 +58,9 @@ Clash 系代理软件的默认端口 7890/7891（Clash Verge Rev 是 7897）。�
    TrustedInstaller / 当前安装的管理员、已有目录里有别的用户建的文件或子目录（在宽松权限下被预先塞进来的，
    比如一个 `keelhost.d` 片段；普通用户建的文件所有者就是他自己，改不掉）时拒绝安装，提示里给出那个路径；
    已有目录先检查、再锁住根目录、再查一遍，最后才重设，堵住检查和重设之间的空档。否则整棵树所有者改为 Administrators，DACL 改为受保护的
-   SYSTEM 和 Administrators 完全控制、Users 读和执行（显式条目清掉）。`Data\` 再单独加固，Users 没有任何权限
-   （实例的 `kbase_server.json` 里有 token）。
+   SYSTEM 和 Administrators 完全控制、Users 读和执行（显式条目清掉）。`Data\`（实例的 `kbase_server.json` 里有
+   token）作为私有子目录在同一次调用里处理，Users 自始至终没有任何权限：锁根目录和整树重设都先用不给 Users 的
+   DACL，`Data\` 设成受保护之后才在其余部分加上 Users 读；首次安装时 `Data\` 由单独一次调用直接按不给 Users 的权限创建。
 3. 选了 Server 且服务在运行：`KeelHost.exe service stop <服务>`（等到服务和工作进程都停下）。
    服务不删不重建，现场改过的登录账户、恢复选项都保留。
 4. 解压选中的组件包。

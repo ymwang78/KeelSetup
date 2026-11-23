@@ -829,17 +829,17 @@ end
 -- refuses a junction on the way or inside, a directory another user owns, and in an existing path
 -- any file or directory another user owns (one planted before this setup ran), and gives the tree
 -- Administrators as owner and a protected DACL (Users read & execute). Data\, where the instances
--- keep their configs and tokens, does not give Users even that; it is secured once the database
--- is or was installed, after the install path, whose reset would otherwise reach it.
+-- keep their configs and tokens, does not give Users even that, at no point: it is a private
+-- subdirectory of the install path's call, and a call of its own creates it for the database.
 -- Returns true, or false, the offending path and the Win32 error.
 function SecureInstallPath()
     installx.LogPrint("Secure " .. _dirInstall .. " ...")
-    local secured, problem, code = installx.FilePathSecure(_dirInstall, true)
+    local secured, problem, code = installx.FilePathSecure(_dirInstall, true, {"Data"})
     if not secured then
         return false, problem, code
     end
     local data = Join(_dirInstall, "Data")
-    if ComponentSelected("KeelBase.Server") or installx.FilePathExists(data) then
+    if ComponentSelected("KeelBase.Server") and not installx.FilePathExists(data) then
         return installx.FilePathSecure(data, false)
     end
     return true

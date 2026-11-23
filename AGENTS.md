@@ -82,7 +82,7 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 | `FilePathExists(path)` | Check file/dir exists |
 | `FilePathMkdir(path)` | Create directories recursively |
 | `FilePathDelete(path)` | Delete file or directory; read-only files are deleted too; a junction or link in the tree is removed itself, never followed |
-| `FilePathSecure(path, usersCanRead)` | Create `path` as needed and make it a directory only SYSTEM and Administrators can change (owner Administrators, protected DACL, Users read & execute when `usersCanRead`), for a LocalSystem service to run from; refuses a junction on the way or inside, a directory another user owns, and in an existing path any file or directory another user owns: `false, path, win32Error` |
+| `FilePathSecure(path, usersCanRead[, privateSubdirs])` | Create `path` as needed and make it a directory only SYSTEM and Administrators can change (owner Administrators, protected DACL, Users read & execute when `usersCanRead`), for a LocalSystem service to run from; the names in `privateSubdirs` (e.g. `{"Data"}`) give Users no access at any point; refuses a junction on the way or inside, a directory another user owns, and in an existing path any file or directory another user owns: `false, path, win32Error` |
 | `FilePathCopy(src, dst, overwrite)` | Copy file |
 | `FilePathChoose(title, default)` | Browse folder dialog |
 | `FilePathCreateShortCut(lnk, target, workdir, desc)` | Create shell shortcut |
