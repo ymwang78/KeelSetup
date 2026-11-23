@@ -99,26 +99,47 @@ inline DWORD ownerIsTrusted(const std::wstring& path, bool& trusted)
     return ERROR_SUCCESS;
 }
 
-// The first reparse point (junction, symbolic link, mount point) inside dir, without following
-// any; empty when there is none.
-inline std::wstring findReparsePoint(const std::wstring& dir)
+// The first entry inside dir that this installer must not take over: a reparse point (junction,
+// symbolic link, mount point; ERROR_REPARSE_POINT_ENCOUNTERED), or a file or directory another
+// user owns (ERROR_INVALID_OWNER). Under the inherited DACL of C:\ any user may create files in an
+// existing tree, and such a file, a keelhost.d fragment say, is owned by its creator, which a
+// standard user cannot change; files the installer, an administrator or the service wrote are
+// not. Nothing is followed. Returns false with the entry and the error, true when there is none.
+inline bool findUntrustedEntry(const std::wstring& dir, std::wstring& problem, DWORD& error)
 {
     WIN32_FIND_DATAW data;
     HANDLE find = FindFirstFileW((dir + L"\\*").c_str(), &data);
-    if (find == INVALID_HANDLE_VALUE)
-        return std::wstring();
-    std::wstring found;
+    if (find == INVALID_HANDLE_VALUE) {
+        error = GetLastError();
+        if (error == ERROR_FILE_NOT_FOUND)
+            return true;  // empty (FindFirstFile finds "." in any real directory)
+        problem = dir;
+        return false;
+    }
+    bool clean = true;
     do {
         if (wcscmp(data.cFileName, L".") == 0 || wcscmp(data.cFileName, L"..") == 0)
             continue;
         std::wstring path = dir + L"\\" + data.cFileName;
-        if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
-            found = path;
-        else if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-            found = findReparsePoint(path);
-    } while (found.empty() && FindNextFileW(find, &data));
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+            problem = path;
+            error = ERROR_REPARSE_POINT_ENCOUNTERED;
+            clean = false;
+            break;
+        }
+        bool trusted = false;
+        DWORD status = ownerIsTrusted(path, trusted);
+        if (status != ERROR_SUCCESS || !trusted) {
+            problem = path;
+            error = status != ERROR_SUCCESS ? status : ERROR_INVALID_OWNER;
+            clean = false;
+            break;
+        }
+        if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            clean = findUntrustedEntry(path, problem, error);
+    } while (clean && FindNextFileW(find, &data));
     FindClose(find);
-    return found;
+    return clean;
 }
 
 inline void enablePrivilege(const wchar_t* name)
@@ -184,9 +205,12 @@ inline bool deleteDirectoryTree(const std::wstring& dir)
 // parents, with the same protection) as needed. Refuses, changing nothing it did not create, when
 // the path or one of its parents is a reparse point or not a directory, when one of them existed
 // and another user owns it (the owner of a parent can delete or rename what is below it), or when
-// a reparse point is inside the path. Otherwise Administrators becomes the owner of the whole tree,
-// which gets the protected DACL of securityDescriptorSddl() (explicit entries removed, so a file
-// someone planted earlier keeps no rights of its own).
+// the path existed and holds a reparse point or a file or directory another user owns (one planted
+// while it had the inherited DACL of C:\; see findUntrustedEntry()). Otherwise Administrators
+// becomes the owner of the whole tree, which gets the protected DACL of securityDescriptorSddl()
+// (explicit entries removed). An existing tree is checked, then locked (the protected DACL on its
+// root, inherited by everything below, so no user can add anything), then checked again for what
+// was created in between, and only then reset: a refusal of the second check leaves it locked.
 inline SecureDirectoryResult secureDirectory(const std::wstring& path, bool usersCanRead)
 {
     using namespace file_security;
@@ -233,17 +257,25 @@ inline SecureDirectoryResult secureDirectory(const std::wstring& path, bool user
             existed = !created;
     }
 
-    if (existed) {
-        std::wstring inner = findReparsePoint(target);
-        if (!inner.empty())
-            return fail(inner, ERROR_REPARSE_POINT_ENCOUNTERED);
-    }
-
     PSID owner = nullptr;
     PACL dacl = nullptr;
     BOOL present = FALSE, defaulted = FALSE;
     GetSecurityDescriptorOwner(descriptor, &owner, &defaulted);
     GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted);
+
+    if (existed) {
+        std::wstring problem;
+        DWORD error = ERROR_SUCCESS;
+        if (!findUntrustedEntry(target, problem, error))
+            return fail(problem, error);
+        DWORD status = SetNamedSecurityInfoW(const_cast<LPWSTR>(target.c_str()), SE_FILE_OBJECT,
+                                             DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                                             nullptr, nullptr, dacl, nullptr);
+        if (status != ERROR_SUCCESS)
+            return fail(target, status);
+        if (!findUntrustedEntry(target, problem, error))
+            return fail(problem, error);
+    }
     // Administrators may make themselves the owner of anything a member created; files the service
     // (SYSTEM) wrote need the restore privilege, which an elevated token holds.
     enablePrivilege(L"SeRestorePrivilege");        // SE_RESTORE_NAME, whatever UNICODE is

@@ -180,6 +180,28 @@ TEST_F(SecureDirectoryFixture, DirectoryOwnedByAnotherUserIsRefused) {
     EXPECT_FALSE(std::filesystem::exists(base + L"\\foreign\\KeelBase"));
 }
 
+// An administrator's existing directory that kept the inherited DACL of C:\: a user added a
+// keelhost.d fragment before the installer ran. Its owner is that user, so it is refused (named),
+// and the tree is left as it was rather than taken over with the planted file in it.
+TEST_F(SecureDirectoryFixture, FilePlantedByAnotherUserInsideIsRefused) {
+    std::wstring planted = base + L"\\tree\\Host\\keelhost.d\\900-planted.xml";
+    writeFile(planted);
+    setSecurity(planted, L"O:BU", OWNER_SECURITY_INFORMATION);
+    SecureDirectoryResult result = secureDirectory(base + L"\\tree", true);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.error, (DWORD)ERROR_INVALID_OWNER);
+    EXPECT_EQ(result.problem, planted);
+    EXPECT_FALSE(summarize(base + L"\\tree").isProtected);
+    EXPECT_TRUE(std::filesystem::exists(planted));
+    // A directory a user created is refused the same way.
+    std::filesystem::remove(planted);
+    ASSERT_TRUE(CreateDirectoryW((base + L"\\tree\\Host\\modules").c_str(), nullptr));
+    setSecurity(base + L"\\tree\\Host\\modules", L"O:BU", OWNER_SECURITY_INFORMATION);
+    result = secureDirectory(base + L"\\tree", true);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.problem, base + L"\\tree\\Host\\modules");
+}
+
 TEST_F(SecureDirectoryFixture, OnlyAbsoluteDrivePathsAreAccepted) {
     for (const wchar_t* path : {L"relative\\KeelBase", L"\\\\server\\share\\KeelBase", L"C:", L"C:\\", L"C:\\a\\\\b"}) {
         SecureDirectoryResult result = secureDirectory(path, true);

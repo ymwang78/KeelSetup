@@ -67,7 +67,7 @@ local _strResourceCN = {
 	SERVICE_TAKEN = "Windows 服务 %s 属于另一处安装（%s），请安装到那个目录，或用 /service= 换一个服务名",
 	BAD_SERVICE_NAME = "服务名只能包含字母、数字、点、下划线和减号: ",
 	BAD_PATH = "安装路径必须是本机磁盘上的绝对路径: ",
-	UNSAFE_PATH = "无法安全地使用安装目录（%s，错误 %s）：路径上或目录里有链接点，或目录不是管理员创建的。请换一个目录，或删除后重试",
+	UNSAFE_PATH = "无法安全地使用安装目录（%s，错误 %s）：路径上或目录里有链接点，或者目录、或目录里的文件是其他用户创建的。请检查并删除它，或换一个目录",
 	SERVICE_NOT_STARTED = "KeelBase 服务 %s 没有启动起来（状态 %s），请查看 %s 下的日志",
 	REQUIRED = "必装",
 	INSTALLED = "已安装",
@@ -98,7 +98,7 @@ local _strResourceEN = {
 	SERVICE_TAKEN = "The Windows service %s belongs to another installation (%s). Install into that directory, or choose another service name with /service=",
 	BAD_SERVICE_NAME = "A service name may only contain letters, digits, dots, underscores and dashes: ",
 	BAD_PATH = "The install path must be an absolute path on a local drive: ",
-	UNSAFE_PATH = "Cannot use the install path safely (%s, error %s): a junction or link is on the way or inside, or another user created the directory. Choose another path, or delete it and retry",
+	UNSAFE_PATH = "Cannot use the install path safely (%s, error %s): a junction or link is on the way or inside, or another user created the directory or a file in it. Check and delete it, or choose another path",
 	SERVICE_NOT_STARTED = "The KeelBase service %s did not start (state %s); see the logs in %s",
 	REQUIRED = "required",
 	INSTALLED = "installed",
@@ -826,7 +826,8 @@ end
 -- The install path holds a LocalSystem service, so only SYSTEM and Administrators may change
 -- anything in it: below C:\ every user may create folders and files, and a module or keelhost.d
 -- fragment someone added would run as SYSTEM. installx.FilePathSecure creates the path as needed,
--- refuses a junction on the way or inside and a directory another user owns, and gives the tree
+-- refuses a junction on the way or inside, a directory another user owns, and in an existing path
+-- any file or directory another user owns (one planted before this setup ran), and gives the tree
 -- Administrators as owner and a protected DACL (Users read & execute). Data\, where the instances
 -- keep their configs and tokens, does not give Users even that; it is secured once the database
 -- is or was installed, after the install path, whose reset would otherwise reach it.

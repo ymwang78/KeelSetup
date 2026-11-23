@@ -55,7 +55,9 @@ Clash 系代理软件的默认端口 7890/7891（Clash Verge Rev 是 7897）。�
 2. 加固安装目录（`installx.FilePathSecure`）：C:\ 默认允许所有用户在下面建目录、建文件，继承下来
    谁都能往 `Host\keelhost.d\` 放片段、往 `Host\modules\` 放插件，被 KeelHost 以 SYSTEM 加载。所以：
    路径上或目录里有 junction / 符号链接、目录（或它的上级）的所有者不是 SYSTEM / Administrators /
-   TrustedInstaller / 当前安装的管理员时拒绝安装；否则整棵树所有者改为 Administrators，DACL 改为受保护的
+   TrustedInstaller / 当前安装的管理员、已有目录里有别的用户建的文件或子目录（在宽松权限下被预先塞进来的，
+   比如一个 `keelhost.d` 片段；普通用户建的文件所有者就是他自己，改不掉）时拒绝安装，提示里给出那个路径；
+   已有目录先检查、再锁住根目录、再查一遍，最后才重设，堵住检查和重设之间的空档。否则整棵树所有者改为 Administrators，DACL 改为受保护的
    SYSTEM 和 Administrators 完全控制、Users 读和执行（显式条目清掉）。`Data\` 再单独加固，Users 没有任何权限
    （实例的 `kbase_server.json` 里有 token）。
 3. 选了 Server 且服务在运行：`KeelHost.exe service stop <服务>`（等到服务和工作进程都停下）。
