@@ -915,11 +915,30 @@ local function OverlappingComponentDir(path)
     return nil
 end
 
+-- Other products under the root whose installers secure their own install path and keep
+-- directories in it without any access for Users (KeelBaseSetup's Data\), by the key that records
+-- the path (InstallPath).
+local SECURED_PRODUCT_KEYS = {"Software\\TaijiControl\\KeelBase"}
+
+-- The recorded install path of such a product that path is, holds or lies in; nil for none.
+local function OverlappingProductDir(path)
+    for _, key in ipairs(SECURED_PRODUCT_KEYS) do
+        local dir = installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, key, "InstallPath")
+        if type(dir) == "string" and IsLocalAbsolutePath((dir:gsub("/", "\\"))) then
+            dir = CollapsePath((dir:gsub("/", "\\")))
+            if Overlaps(path, dir) then return dir end
+        end
+    end
+    return nil
+end
+
 -- HostVM loads its projects, Python code among them, from projects_dir and keeps their list in
 -- metadb_path, as SYSTEM, and creates them on its first start. hostvm.xml names them relative to
--- HostVM\, where the service runs. Returns the directories below the install root; one elsewhere
--- is left to the site, and one that is, holds or lies in a component's directory is secured with
--- that component (securing it again would undo hostvm.d\'s or data\'s DACL); both are logged.
+-- HostVM\, where the service runs. Returns the directories below the install root. Left out, and
+-- logged: one elsewhere, which belongs to the site; one that is, holds or lies in a component's
+-- directory, which is secured with that component (securing it again would undo hostvm.d\'s or
+-- data\'s DACL); and one that overlaps another product's install path, which that product's
+-- installer secures (giving Users read there would undo KeelBase's Data\ DACL).
 function HostVMProjectDirs()
     local hostvmDir = _dirCompany .. "\\HostVM"
     local config = hostvmDir .. "\\hostvm.xml"
@@ -938,10 +957,13 @@ function HostVMProjectDirs()
                 if name == "metadb_path" then path = path:match("^(.*)\\[^\\]+$") end
             end
             local componentDir = path and OverlappingComponentDir(path)
+            local productDir = path and OverlappingProductDir(path)
             if path == nil or not IsBelow(path, _dirCompany) then
                 installx.LogPrint("HostVM " .. name .. " " .. value .. " is outside " .. _dirCompany .. ", not secured")
             elseif componentDir then
                 installx.LogPrint("HostVM " .. name .. " " .. value .. " overlaps " .. componentDir .. ", secured as that component")
+            elseif productDir then
+                installx.LogPrint("HostVM " .. name .. " " .. value .. " overlaps " .. productDir .. ", which its own setup secures; not secured")
             elseif not seen[path:lower()] then
                 seen[path:lower()] = true
                 table.insert(dirs, path)
@@ -953,14 +975,13 @@ function HostVMProjectDirs()
     return dirs
 end
 
--- Without access for Users: hostvm.xml may name any directory below the root, another product's
--- among them (KeelBase's Data\), and the installer never gives Users read access to a directory it
--- did not install. The projects hold their configurations; the client reaches them through HostVM.
+-- Users may read the projects, as before (decided on PR #20); none of them overlaps a
+-- component's directory or another product's install path (HostVMProjectDirs).
 -- Returns true, or false, the path FilePathSecure refused and the Win32 error.
 function SecureHostVMProjects()
     for _, dir in ipairs(HostVMProjectDirs()) do
-        installx.LogPrint("Secure " .. dir .. " (no access for Users) ...")
-        local secured, problem, code = installx.FilePathSecure(dir, false)
+        installx.LogPrint("Secure " .. dir .. " ...")
+        local secured, problem, code = installx.FilePathSecure(dir, true)
         if not secured then
             return false, problem, code
         end
