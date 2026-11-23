@@ -30,8 +30,8 @@ using namespace std;
 #endif
 
 // COMPANYNAME / PRODUCTNAME: HKCU\Software\TaijiControl\KeelBase, removed when uninstalling.
-// APPEXENAME: the process the uninstaller ends before deleting the KeelBase directory, which holds
-// kbased.exe among the command-line tools.
+// APPEXENAME: the process the uninstaller ends, when it runs from the install path (Tools\kbased.exe),
+// before deleting the program directories.
 #define COMPANYNAME L"TaijiControl" // company name
 #define PRODUCTNAME L"KeelBase"     // product name
 #define APPEXENAME  L"kbased.exe"   // main program

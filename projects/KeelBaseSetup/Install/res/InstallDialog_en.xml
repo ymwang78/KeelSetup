@@ -43,7 +43,6 @@
 					<Control width="8" />
 					<VerticalLayout name="compcol2" childpadding="6" vscrollbar="true">
 						<Option name="grp_KeelBase" text="KeelBase" font="1" height="20" textcolor="#FF333333" />
-						<Option name="item_KeelBase_Host" text="Host" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
 						<Option name="item_KeelBase_Server" text="Server" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
 						<Option name="item_KeelBase_Tools" text="Tools" padding="22,0,0,0" disabledtextcolor="#FFAAAAAA" />
 					</VerticalLayout>

@@ -9,9 +9,10 @@ Run with any Python 3.9+ on the build machine, after KeelHost (KeelHost.sln, Rel
 Steps:
   1. MSBuild the uninstaller (UnInstall.exe goes into the required Common.7z).
   2. Stage every component archive under bin/stage/<archive>/, with the paths it gets under the
-     install root, from the KeelHost and KeelBase build outputs (see COMPONENTS).
+     install path, from the KeelHost and KeelBase build outputs (see collect_components()).
   3. Check the staged binaries: every DLL they import is in the same directory, in Windows or the
-     VC++ runtime the installer brings; the module's module.xml names kh_keelbase.dll.
+     VC++ runtime the installer brings; the module's module.xml names kh_keelbase.dll; the staged
+     KeelHost loads the staged module and accepts the instance (`KeelHost.exe module check`).
   4. Pack each component into Install/res/<archive>.7z and check the archive's members.
   5. Write the version (and the bundled vc_redist's) into Install.lua and the .rc files, MSBuild the
      installer, put the sources back, and copy Install.exe to KeelBaseSetup_<version>.exe.
@@ -40,13 +41,14 @@ INSTALL_RC = INSTALL_DIR / "Install.rc"
 UNINSTALL_RC = UNINSTALL_DIR / "UnInstall.rc"
 RESOURCE_H = INSTALL_DIR / "resource.h"
 FRAGMENT_TEMPLATE = SETUP_ROOT / "dist" / "020-kbase.xml.template"
+HOST_CONFIG_SEED = SETUP_ROOT / "dist" / "keelhost.xml"
 
 SEVEN_ZIP_ARGS = ["-t7z", "-mx=5", "-m0=LZMA2", "-md=16m", "-mfb=32", "-ms=64m", "-mmt=on"]
 
 # KeelHost and what zce.dll needs (libpq and its OpenSSL / gettext / iconv / winpthread). The
-# import check below fails the build when this list misses a DLL.
+# import check below fails the build when this list misses a DLL. KeelBase's KeelHost is new, so
+# it carries only the new name, KeelHost.exe, not the HostVM.exe copy older sites still start.
 HOST_FILES = (
-    "HostVM.exe",
     "KeelHost.exe",
     "zce.dll",
     "libpq.dll",
@@ -191,41 +193,43 @@ class Component:
     def __init__(self, archive, res_id, files):
         self.archive = archive        # Install/res/<archive>
         self.res_id = res_id          # INSTALLSOFT resource ID, as in resource.h and Install.lua
-        self.files = files            # {path under the install root: source file}
+        self.files = files            # {path under the install path: source file}
 
 
 def collect_components(args):
+    """The archives and what goes into each, with the paths they get under the install path
+    (default C:\\TaijiControl\\KeelBase): Host\\ is KeelBase's own KeelHost, Tools\\ the command-line
+    tools, Redist\\ the runtime installers, Uninstall\\ the uninstaller."""
     host_dir, module_dir, kbase_bin = args.host_dir, args.module_dir, args.kbase_bin
     common = {
-        "Common/vcredist/vc_redist.x64.exe": args.vc_redist,
-        "KeelBase/UnInstall.exe": OUTPUT_DIR / "UnInstall.exe",
+        "Redist/vc_redist.x64.exe": args.vc_redist,
+        "Uninstall/UnInstall.exe": OUTPUT_DIR / "UnInstall.exe",
     }
     opc = {
-        "Common/opc/GBDA_Install_Prereq_x64.msi": args.opc_dir / "GBDA_Install_Prereq_x64.msi",
-        "Common/opc/GBDA_Install_Prereq_x86.msi": args.opc_dir / "GBDA_Install_Prereq_x86.msi",
+        "Redist/opc/GBDA_Install_Prereq_x64.msi": args.opc_dir / "GBDA_Install_Prereq_x64.msi",
+        "Redist/opc/GBDA_Install_Prereq_x86.msi": args.opc_dir / "GBDA_Install_Prereq_x86.msi",
     }
-    host = {f"HostVM/{name}": host_dir / name for name in HOST_FILES}
-    host["HostVM/hostvm.default.xml"] = args.host_config
-    server = {
-        "HostVM/modules/KeelBase/kh_keelbase.dll": module_dir / "kh_keelbase.dll",
-        "HostVM/modules/KeelBase/module.xml": module_dir / "module.xml",
+    server = {f"Host/{name}": host_dir / name for name in HOST_FILES}
+    server.update({
+        "Host/keelhost.default.xml": args.host_config,
+        "Host/modules/KeelBase/kh_keelbase.dll": module_dir / "kh_keelbase.dll",
+        "Host/modules/KeelBase/module.xml": module_dir / "module.xml",
         # The data-plane client other modules (SoftSensor, KeelTrace) load from the KeelBase module.
-        "HostVM/modules/KeelBase/kbase_client.dll": kbase_bin / "kbase_client.dll",
-        "HostVM/keelhost.d/020-kbase.xml.template": FRAGMENT_TEMPLATE,
-    }
-    tools = {"KeelBase/kbased.exe": kbase_bin / "kbased.exe"}
+        "Host/modules/KeelBase/kbase_client.dll": kbase_bin / "kbase_client.dll",
+        "Host/keelhost.d/020-kbase.xml.template": FRAGMENT_TEMPLATE,
+    })
+    tools = {"Tools/kbased.exe": kbase_bin / "kbased.exe"}
     kbasecli = args.kbasecli or kbase_bin / "kbasecli.exe"
     if kbasecli.is_file():
-        tools["KeelBase/kbasecli.exe"] = kbasecli
+        tools["Tools/kbasecli.exe"] = kbasecli
     else:
         print(f"Note: {kbasecli} not found, KeelBaseTools.7z carries kbased.exe only "
-              "(KeelBase has no Windows project for kbasecli yet; pass --kbasecli to add one)")
+              "(pass --kbasecli, or build kbasecli in kbase.sln, to add it)")
     return [
         Component("Common.7z", 150, common),
         Component("OpcCore.7z", 151, opc),
-        Component("KeelHost.7z", 160, host),
-        Component("KeelBaseServer.7z", 161, server),
-        Component("KeelBaseTools.7z", 162, tools),
+        Component("KeelBaseServer.7z", 160, server),
+        Component("KeelBaseTools.7z", 161, tools),
     ]
 
 
@@ -277,10 +281,10 @@ def stage(components):
 
 def check_imports(components):
     """Every DLL a staged binary imports must be found where Windows will look at run time: the
-    binary's own directory, HostVM/ (the KeelHost process loads the module), Windows, or the VC++
+    binary's own directory, Host/ (the KeelHost process loads the module), Windows, or the VC++
     runtime that Common.7z installs."""
     system_dir = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
-    host_dir = STAGE_ROOT / "KeelHost" / "HostVM"
+    host_dir = STAGE_ROOT / "KeelBaseServer" / "Host"
     problems = []
     for component in components:
         root = STAGE_ROOT / Path(component.archive).stem
@@ -289,7 +293,7 @@ def check_imports(components):
             if path.suffix.lower() not in (".exe", ".dll"):
                 continue
             search = [path.parent]
-            if member.lower().startswith("hostvm/"):
+            if member.lower().startswith("host/"):
                 search.append(host_dir)
             for name in pe_imports(path):
                 if not import_is_available(name, search, system_dir):
@@ -302,21 +306,20 @@ def check_imports(components):
 def check_module_loads():
     """KeelHost from the package loads the KeelBase module from the package, and accepts the
     instance of the fragment template next to the seeded config, as a first install leaves them:
-    `HostVM.exe module check` loads every module and checks every declared instance's vmtype
+    `KeelHost.exe module check` loads every module and checks every declared instance's vmtype
     (zce ABI and build id included) without starting anything."""
     check_root = STAGE_ROOT / "_check"
     if check_root.exists():
         shutil.rmtree(check_root)
-    shutil.copytree(STAGE_ROOT / "KeelHost", check_root)
-    shutil.copytree(STAGE_ROOT / "KeelBaseServer", check_root, dirs_exist_ok=True)
-    host = check_root / "HostVM"
-    shutil.copy2(host / "hostvm.default.xml", host / "hostvm.xml")
+    shutil.copytree(STAGE_ROOT / "KeelBaseServer", check_root)
+    host = check_root / "Host"
+    shutil.copy2(host / "keelhost.default.xml", host / "keelhost.xml")
     shutil.copy2(host / "keelhost.d" / "020-kbase.xml.template", host / "keelhost.d" / "020-kbase.xml")
-    result = subprocess.run([str(host / "HostVM.exe"), "module", "check"], cwd=host, capture_output=True,
+    result = subprocess.run([str(host / "KeelHost.exe"), "module", "check"], cwd=host, capture_output=True,
                             text=True, timeout=120)
     print(result.stdout.strip())
     if result.returncode != 0 or not re.search(r"^ok\s+instance kbase01 \(KeelBase\)", result.stdout, re.M):
-        raise SystemExit(f"HostVM.exe module check failed (exit {result.returncode}):\n{result.stdout}{result.stderr}")
+        raise SystemExit(f"KeelHost.exe module check failed (exit {result.returncode}):\n{result.stdout}{result.stderr}")
     shutil.rmtree(check_root)
 
 
@@ -399,20 +402,20 @@ def parse_args():
     parser.add_argument("--module-dir", type=Path, help="the KeelBase module (default: <host-dir>/modules/KeelBase)")
     parser.add_argument("--kbase-bin", type=Path, help="KeelBase Release output (default: <workspace>/modules/KeelBase/bin/x64/Release)")
     parser.add_argument("--kbasecli", type=Path, help="kbasecli.exe to ship (default: <kbase-bin>/kbasecli.exe when it exists)")
-    parser.add_argument("--host-config", type=Path, help="site config seed (default: <workspace>/apps/KeelDeck/dist/hostvm/hostvm.xml)")
+    parser.add_argument("--host-config", type=Path, default=HOST_CONFIG_SEED,
+                        help="KeelHost config seed, shipped as Host/keelhost.default.xml (default: dist/keelhost.xml next to this script)")
     parser.add_argument("--opc-dir", type=Path, help="GBDA_Install_Prereq_x64/x86.msi (default: <workspace>/apps/KeelDeck/bin/x64/Common/opc)")
     parser.add_argument("--vc-redist", type=Path, help="vc_redist.x64.exe (default: the newest MSVC toolset's in Visual Studio)")
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR, help="where KeelBaseSetup_<version>.exe goes")
     parser.add_argument("--stage-only", action="store_true", help="stop after staging, checking and packing the archives")
     args = parser.parse_args()
 
-    if args.workspace is None and not all((args.host_dir, args.kbase_bin, args.host_config, args.opc_dir)):
+    if args.workspace is None and not all((args.host_dir, args.kbase_bin, args.opc_dir)):
         parser.error("cannot find the cxxproj workspace above this script; pass --workspace")
     ws = args.workspace
     args.host_dir = args.host_dir or ws / "hosts" / "KeelHost" / "bin" / "x64" / "HostVM"
     args.module_dir = args.module_dir or args.host_dir / "modules" / "KeelBase"
     args.kbase_bin = args.kbase_bin or ws / "modules" / "KeelBase" / "bin" / "x64" / "Release"
-    args.host_config = args.host_config or ws / "apps" / "KeelDeck" / "dist" / "hostvm" / "hostvm.xml"
     args.opc_dir = args.opc_dir or ws / "apps" / "KeelDeck" / "bin" / "x64" / "Common" / "opc"
     args.vc_redist = args.vc_redist or find_vc_redist()
     if args.vc_redist is None:

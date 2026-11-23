@@ -231,10 +231,22 @@ void CUninstallMainFrame::ClearUnInstall()
 
 	reg.DeleteKey(HKEY_CURRENT_USER, strkey.c_str(), PRODUCTNAME);
 
-	char syscmd[MAX_PATH] = { 0 };
-	sprintf_s(syscmd, "/C ping 127.0.0.1 -n 5 > nul & rmdir /s /Q \"%s\" ", m_strUnInstallDir.c_str());
-	ShellExecuteA(NULL, NULL, "cmd.exe", syscmd, NULL, SW_HIDE);
+	// Once this process has exited: the uninstaller's own directory, then the install path above it,
+	// which a plain rmdir only removes when nothing (the instances' Data\) is left in it.
+	std::string syscmd = "/C ping 127.0.0.1 -n 5 > nul & rmdir /s /Q \"" + m_strUnInstallDir + "\" & rmdir \""
+		+ ParentDir(m_strUnInstallDir) + "\"";
+	ShellExecuteA(NULL, NULL, "cmd.exe", syscmd.c_str(), NULL, SW_HIDE);
 	PostMessage(WM_CLOSE, 0, 0);
+}
+
+// "C:\\TaijiControl\\KeelBase\\Uninstall\\" -> "C:\\TaijiControl\\KeelBase": the install path, which
+// holds the uninstaller's directory.
+std::string CUninstallMainFrame::ParentDir(std::string dir)
+{
+	while (!dir.empty() && (dir.back() == '\\' || dir.back() == '/'))
+		dir.pop_back();
+	size_t slash = dir.find_last_of("\\/");
+	return slash == std::string::npos ? dir : dir.substr(0, slash);
 }
 
 void CUninstallMainFrame::UnInstall()
@@ -244,7 +256,9 @@ void CUninstallMainFrame::UnInstall()
     std::wstring wstrdir = CTypeConvertUtil::StringToWstring(m_strUnInstallDir);
 
 	CDuiString hintString;
-	hintString.Format(L"是否删除<%s>及其所有子文件夹?请注意备份保存好工程文件。", wstrdir.c_str());
+	std::wstring installDir = CTypeConvertUtil::StringToWstring(ParentDir(m_strUnInstallDir));
+	hintString.Format(L"是否卸载 KeelBase（%s）？KeelBase 服务和程序文件将被删除，实例数据（%s\\Data）保留。",
+		installDir.c_str(), installDir.c_str());
 	int ret = m_bSilent ? IDOK : MessageBox(GetHWND(), hintString, L"提示", MB_OKCANCEL);
 	if (ret == IDCANCEL)
 	{
@@ -367,12 +381,11 @@ void CUninstallMainFrame::DeleteAllFile(std::wstring &strFile, int &nCurUnInstal
 	Sleep(60);
 }
 
-// Whether a file is inside the directory UnInstall() deletes (m_strUnInstallDir), case-insensitively.
-bool CUninstallMainFrame::IsInUnInstallDir(const std::wstring& path) const
+// Whether a file is inside the install path (the parent of m_strUnInstallDir), case-insensitively:
+// kbased.exe runs from its Tools\ directory.
+bool CUninstallMainFrame::IsInInstallDir(const std::wstring& path) const
 {
-	std::wstring dir = CTypeConvertUtil::StringToWstring(m_strUnInstallDir);
-	while (!dir.empty() && (dir.back() == L'\\' || dir.back() == L'/'))
-		dir.pop_back();
+	std::wstring dir = CTypeConvertUtil::StringToWstring(ParentDir(m_strUnInstallDir));
 	if (dir.empty() || path.size() <= dir.size() + 1)
 		return false;
 	return _wcsnicmp(path.c_str(), dir.c_str(), dir.size()) == 0 && path[dir.size()] == L'\\';
@@ -413,7 +426,7 @@ void CUninstallMainFrame::KillProcess()
 					// anywhere else is not this installation's business.
 					wchar_t image[MAX_PATH * 2] = { 0 };
 					DWORD size = _countof(image);
-					if (QueryFullProcessImageNameW(hProcess, 0, image, &size) && IsInUnInstallDir(image))
+					if (QueryFullProcessImageNameW(hProcess, 0, image, &size) && IsInInstallDir(image))
 						TerminateProcess(hProcess, 0);//关闭进程;
 					CloseHandle(hProcess);
 				}

@@ -164,7 +164,6 @@ IDI_INSTALL             ICON                    "Install.ico"
 
 IDR_PKG_COMMON_RUNTIME      INSTALLSOFT         "res\\Common.7z"
 IDR_PKG_COMMON_OPCCORE      INSTALLSOFT         "res\\OpcCore.7z"
-IDR_PKG_KEELBASE_HOST       INSTALLSOFT         "res\\KeelHost.7z"
 IDR_PKG_KEELBASE_SERVER     INSTALLSOFT         "res\\KeelBaseServer.7z"
 IDR_PKG_KEELBASE_TOOLS      INSTALLSOFT         "res\\KeelBaseTools.7z"
 

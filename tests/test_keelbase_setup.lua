@@ -1,24 +1,27 @@
 -- Run from the repository root: lua tests/test_keelbase_setup.lua
 -- KeelBaseSetup: default selection and upgrades, the install path and service name and their
--- command-line overrides, the check that the KeelHost service belongs to this install path, which
--- services are stopped and started, the KeelHost config and the KeelBase instance fragment, the VC++
--- runtime check, the registry, and the uninstaller with KeelHost of its own or shared with TaijiMPC6.
+-- command-line overrides, the check that the KeelHost service belongs to this install path, when
+-- the service is stopped, installed and started, the KeelHost config and the KeelBase instance
+-- fragment, the VC++ runtime check, the registry, and the uninstaller.
 local ROOT = "C:\\Test path\\中文"
-local HOST = ROOT .. "\\HostVM"
+local INSTALL = ROOT .. "\\KeelBase"
+local HOST = INSTALL .. "\\Host"
 local MB = 1024 * 1024
-local SIZES = {[150] = 26, [151] = 7, [160] = 9, [161] = 6, [162] = 4}
+local SIZES = {[150] = 26, [151] = 7, [160] = 15, [161] = 4}
 local MARKERS = {
-    ["Common.Runtime"] = "KeelBase\\UnInstall.exe",
-    ["Common.OpcCore"] = "Common\\opc\\GBDA_Install_Prereq_x64.msi",
-    ["KeelBase.Host"] = "HostVM\\HostVM.exe",
-    ["KeelBase.Server"] = "HostVM\\modules\\KeelBase\\kh_keelbase.dll",
-    ["KeelBase.Tools"] = "KeelBase\\kbased.exe",
+    ["Common.Runtime"] = "Uninstall\\UnInstall.exe",
+    ["Common.OpcCore"] = "Redist\\opc\\GBDA_Install_Prereq_x64.msi",
+    ["KeelBase.Server"] = "Host\\modules\\KeelBase\\kh_keelbase.dll",
+    ["KeelBase.Tools"] = "Tools\\kbased.exe",
 }
-local ALL = {"Common.Runtime", "Common.OpcCore", "KeelBase.Host", "KeelBase.Server", "KeelBase.Tools"}
+local ITEM_OF_RES = {[150] = "Common.Runtime", [151] = "Common.OpcCore", [160] = "KeelBase.Server", [161] = "KeelBase.Tools"}
+local ALL = {"Common.Runtime", "Common.OpcCore", "KeelBase.Server", "KeelBase.Tools"}
 local PRODUCT_KEY = "software\\taijicontrol\\keelbase"
 local COMPONENTS_KEY = PRODUCT_KEY .. "\\components"
 local SHARED_KEY = "software\\taijicontrol"
 local VC_KEY = "software\\microsoft\\visualstudio\\14.0\\vc\\runtimes\\x64"
+local UNINSTALL_KEY = "software\\microsoft\\windows\\currentversion\\uninstall\\keelbase"
+local ENV_KEY = "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"
 
 local files, registry, args, commands, ui, unzipped, failed, errors, serviceStates, subvms, freeBytes, missing
 
@@ -67,7 +70,7 @@ installx = {
     RegGetValue = function(root, path, name) return getReg(path, name) end,
     RegGetDefaultValue = function() return nil end,
     RegSetValue = function(root, path, name, value)
-        assert(type(value) == "string", "RegSetValue of a non-string writes garbage: " .. name)
+        assert(type(value) == "string", "only strings are written: " .. name)
         table.insert(commands, "reg " .. path .. "|" .. name .. "=" .. value)
         setReg(path, name, value)
         return true
@@ -122,7 +125,7 @@ installx = {
     FilePathMkdir = function() return true end,
     FilePathChoose = function() return nil end,
     FilePathUnzip = function(resourceIDs, directory)
-        assert(directory == ROOT, directory)
+        assert(directory == INSTALL, directory)
         unzipped = resourceIDs
         return true
     end,
@@ -143,7 +146,7 @@ installx = {
     end,
     FilePathListFiles = function(directory)
         local list = {}
-        for key, path in pairs(files) do
+        for _, path in pairs(files) do
             if lower(dirOf(path) or "") == lower(directory) then table.insert(list, path:match("[^\\]+$")) end
         end
         return list
@@ -156,21 +159,23 @@ installx = {
     end,
 }
 
--- options.installed: items whose marker exists under ROOT; options.recorded: items this setup
--- recorded for ROOT (an earlier KeelBase install); options.services: name -> {state, exe}.
+-- options.installed: items whose marker exists under INSTALL; options.recorded: items this setup
+-- recorded for options.recordedPath (default INSTALL); options.services: name -> {state, exe};
+-- options.sharedRoot: Software\TaijiControl\InstallPath (default ROOT, false for none).
 local function reset(options)
     options = options or {}
     files, registry, args, commands = {}, {}, options.args or {}, {}
     unzipped, failed, errors, serviceStates, subvms, missing = nil, nil, {}, {}, {}, {}
     ui = {visible = {}, text = {}, selected = {}, enabled = {}, tab = 0}
     freeBytes = 100 * 1024 * MB
-    for _, key in ipairs(options.installed or {}) do addFile(ROOT .. "\\" .. MARKERS[key]) end
+    for _, key in ipairs(options.installed or {}) do addFile(INSTALL .. "\\" .. MARKERS[key]) end
     for _, res in ipairs(options.missing or {}) do missing[res] = true end
     if options.sharedRoot ~= false then setReg(SHARED_KEY, "InstallPath", options.sharedRoot or ROOT) end
     if options.recorded then
-        setReg(PRODUCT_KEY, "InstallPath", options.recordedRoot or ROOT)
+        setReg(PRODUCT_KEY, "InstallPath", options.recordedPath or INSTALL)
         for _, key in ipairs(options.recorded) do setReg(COMPONENTS_KEY, key, "3.0.0.0") end
     end
+    if options.serviceName then setReg(PRODUCT_KEY, "ServiceName", options.serviceName) end
     for name, spec in pairs(options.services or {}) do service(name, spec[1], spec[2]) end
     if options.vcRuntime then
         setReg(VC_KEY, "Installed", 1)
@@ -208,20 +213,19 @@ local function commandAt(text)
     end
 end
 
+local SERVICE_COMMAND = "KeelHost.exe\" service"
+
 -- Extracts what StartSetup chose and runs PostSetup as the framework does after extraction: the
--- archives' files appear under ROOT.
+-- archives' files appear under INSTALL.
 local function runSetup()
     commands = {}
     StartSetup()
     if unzipped == nil then return false end
     for _, res in ipairs(unzipped) do
-        for key, marker in pairs(MARKERS) do
-            local item = ({[150] = "Common.Runtime", [151] = "Common.OpcCore", [160] = "KeelBase.Host",
-                           [161] = "KeelBase.Server", [162] = "KeelBase.Tools"})[res]
-            if item == key then addFile(ROOT .. "\\" .. marker) end
-        end
-        if res == 160 then addFile(HOST .. "\\hostvm.default.xml") end
-        if res == 161 then
+        addFile(INSTALL .. "\\" .. MARKERS[ITEM_OF_RES[res]])
+        if res == 160 then
+            addFile(HOST .. "\\KeelHost.exe")
+            addFile(HOST .. "\\keelhost.default.xml")
             addFile(HOST .. "\\keelhost.d\\020-kbase.xml.template")
             subvms[lower(HOST .. "\\keelhost.d\\020-kbase.xml.template")] = {"kbase01"}
         end
@@ -232,54 +236,45 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Selection
 
--- First install: everything selected, the biggest archive first, the shared root as install path.
+-- First install: everything selected, the biggest archive first, KeelBase\ under the shared root.
 install()
 check(selection() == table.concat(ALL, ","), "first install selects all: " .. selection())
-check(ui.text["pathedit"] == ROOT, "install path from the shared root: " .. tostring(ui.text["pathedit"]))
+check(ui.text["pathedit"] == INSTALL, "install path under the shared root: " .. tostring(ui.text["pathedit"]))
 check(ui.enabled["item_Common_Runtime"] == false and ui.selected["item_Common_Runtime"] == true, "runtime locked")
 local plan = ComponentPlan()
-check(#plan == 5 and plan[1].res == 150 and plan[#plan].res == 162, "biggest first")
--- Deselecting the host also deselects the database, which needs it.
-OnSelChanged("item_KeelBase_Host", false)
-check(not ComponentSelected("KeelBase.Server") and ComponentSelected("KeelBase.Tools"), "server follows host")
-check(ui.text["comphintlab"]:find("KeelBase 时序数据库", 1, true) ~= nil, "hint names the database: " .. ui.text["comphintlab"])
+check(#plan == 4 and plan[1].res == 150 and plan[#plan].res == 161, "biggest first")
+OnSelChanged("grp_KeelBase", false)
+check(selection() == "Common.Runtime,Common.OpcCore", "group off: " .. selection())
 OnSelChanged("item_KeelBase_Server", true)
-check(ComponentSelected("KeelBase.Host"), "selecting the database selects the host")
+check(ComponentGroupState("KeelBase") == "partial", "partial group")
 
--- Another product's KeelHost in this root is not an upgrade of KeelBase: the host is selected as
--- well (the module is built against the KeelHost of this package).
-install({installed = {"KeelBase.Host", "Common.OpcCore"}})
-check(selection() == table.concat(ALL, ","), "first install over TaijiMPC6 selects all: " .. selection())
-
--- Upgrade: what this setup installed last time, the host kept as it is.
-install({installed = {"Common.Runtime", "KeelBase.Host", "KeelBase.Server"},
-         recorded = {"Common.Runtime", "KeelBase.Server"}})
+-- Upgrade: what this setup installed last time.
+install({installed = {"Common.Runtime", "KeelBase.Server"}, recorded = {"Common.Runtime", "KeelBase.Server"}})
 check(selection() == "Common.Runtime,KeelBase.Server", "upgrade keeps the recorded set: " .. selection())
--- The record of another install path does not count.
-install({installed = {"KeelBase.Host"}, recorded = {"Common.Runtime", "KeelBase.Server"},
-         recordedRoot = "D:\\Elsewhere"})
-check(selection() == "Common.Runtime,KeelBase.Host,KeelBase.Server" or
-      selection() == table.concat(ALL, ","), "other root's record ignored: " .. selection())
+-- The record of another install path does not count: selecting that path below is a first install.
+install({installed = {"KeelBase.Server"}, recorded = {"Common.Runtime"}, recordedPath = "D:\\Elsewhere",
+         args = {path = INSTALL}})
+check(selection() == table.concat(ALL, ","), "other path's record ignored: " .. selection())
 
--- /components picks exactly those, plus what they need.
-install({args = {components = "KeelBase.Server"}})
-check(selection() == "Common.Runtime,KeelBase.Host,KeelBase.Server", "/components: " .. selection())
+-- /components picks exactly those besides the required ones.
+install({args = {components = "KeelBase.Tools"}})
+check(selection() == "Common.Runtime,KeelBase.Tools", "/components: " .. selection())
 install({args = {components = "KeelBase.Nope", s = true}})
 runSetup()
 check(failed ~= nil and failed:find("KeelBase.Nope", 1, true) ~= nil and unzipped == nil, "unknown component fails a silent install")
 -- An archive this installer lacks hides the item.
-install({missing = {162}})
+install({missing = {161}})
 check(not ComponentSelected("KeelBase.Tools") and ui.visible["item_KeelBase_Tools"] == false, "missing archive hidden")
 
 ----------------------------------------------------------------------------------------------------
 -- Install path and service name
 
 install({sharedRoot = false})
-check(ui.text["pathedit"] == "C:\\TaijiControl", "default root without any record")
+check(ui.text["pathedit"] == "C:\\TaijiControl\\KeelBase", "default path without any record")
 install({args = {path = "D:\\KB\\"}})
 check(ui.text["pathedit"] == "D:\\KB", "/path= wins, trailing backslash dropped: " .. ui.text["pathedit"])
-install({recorded = {"Common.Runtime"}, recordedRoot = "E:\\KeelBase root"})
-check(ui.text["pathedit"] == "E:\\KeelBase root", "recorded KeelBase root wins over the shared root")
+install({recorded = {"Common.Runtime"}, recordedPath = "E:\\KeelBase root"})
+check(ui.text["pathedit"] == "E:\\KeelBase root", "recorded KeelBase path wins over the shared root")
 install({args = {path = "\\\\server\\share", s = true}})
 runSetup()
 check(failed ~= nil and failed:find("server", 1, true) ~= nil and unzipped == nil, "UNC path refused")
@@ -290,57 +285,59 @@ check(failed ~= nil and unzipped == nil, "bad service name refused")
 ----------------------------------------------------------------------------------------------------
 -- The KeelHost service
 
--- A service of that name that runs another installation's KeelHost is neither stopped nor taken.
-install({args = {s = true}, services = {HostVM = {"running", "C:\\TaijiControl\\HostVM\\HostVM.exe"}}})
+-- A KeelBase service of another install path is neither stopped nor taken.
+install({args = {s = true}, services = {KeelBase = {"running", "D:\\Other\\KeelBase\\Host\\KeelHost.exe"}}})
 check(runSetup() == false and unzipped == nil, "foreign service blocks the install")
-check(failed:find("C:\\TaijiControl\\HostVM\\HostVM.exe", 1, true) ~= nil, "message names the other exe: " .. failed)
+check(failed:find("D:\\Other\\KeelBase\\Host\\KeelHost.exe", 1, true) ~= nil, "message names the other exe: " .. failed)
 check(commandAt("service stop") == nil, "foreign service not stopped")
 -- /service= picks another name next to it.
-install({args = {s = true, service = "KeelBaseTest"},
-         services = {HostVM = {"running", "C:\\TaijiControl\\HostVM\\HostVM.exe"}}})
+install({args = {s = true, service = "KeelBase2"}, services = {KeelBase = {"running", "D:\\Other\\KeelBase\\Host\\KeelHost.exe"}}})
 check(runSetup() == true, "own service name installs")
-check(commandAt("service install KeelBaseTest") and commandAt("service start KeelBaseTest"), "own service installed and started")
-check(commandAt(" HostVM") == nil or not commandAt("service stop HostVM"), "HostVM untouched")
-check(getReg(PRODUCT_KEY, "ServiceName") == "KeelBaseTest", "service name recorded")
+check(commandAt("service install KeelBase2") and commandAt("service start KeelBase2"), "own service installed and started")
+check(commandAt("service stop") == nil, "the other KeelBase service untouched")
+check(getReg(PRODUCT_KEY, "ServiceName") == "KeelBase2", "service name recorded")
 
--- First install, no service: created, then started; config seeded, fragment created.
-install()
+-- First install next to TaijiMPC6's HostVM service, which this setup does not care about:
+-- KeelBase's own service is created, then started; config seeded, fragment created.
+install({services = {HostVM = {"running", ROOT .. "\\HostVM\\HostVM.exe"}}})
 check(runSetup() == true, "first install completes")
-local installAt, startAt = commandAt("service install HostVM"), commandAt("service start HostVM")
+local installAt, startAt = commandAt("service install KeelBase"), commandAt("service start KeelBase")
 check(installAt and startAt and installAt < startAt, "service installed, then started")
-check(commandAt("copy " .. HOST .. "\\hostvm.default.xml -> " .. HOST .. "\\hostvm.xml"), "hostvm.xml seeded")
+check(commandAt(HOST .. "\\KeelHost.exe\" service install KeelBase"), "service runs KeelBase's own KeelHost")
+check(commandAt("HostVM") == nil, "nothing of TaijiMPC6's HostVM touched")
+check(commandAt("copy " .. HOST .. "\\keelhost.default.xml -> " .. HOST .. "\\keelhost.xml"), "keelhost.xml seeded")
 check(commandAt("copy " .. HOST .. "\\keelhost.d\\020-kbase.xml.template -> " .. HOST .. "\\keelhost.d\\020-kbase.xml"),
       "instance fragment created")
 check(commandAt("service stop") == nil, "nothing to stop")
-check(commandAt("GBDA_Install_Prereq_x64.msi") and commandAt("GBDA_Install_Prereq_x86.msi"), "OPC core components installed")
-check(commandAt("vc_redist.x64.exe"), "VC++ runtime installed when missing")
+check(commandAt(INSTALL .. "\\Redist\\opc\\GBDA_Install_Prereq_x64.msi") and commandAt("GBDA_Install_Prereq_x86.msi"),
+      "OPC core components installed")
+check(commandAt(INSTALL .. "\\Redist\\vc_redist.x64.exe"), "VC++ runtime installed when missing")
 check(ui.percent == 100, "progress at 100")
 
--- Upgrade with the service running here: stopped before extraction, started after, not recreated.
-install({installed = {"Common.Runtime", "KeelBase.Host", "KeelBase.Server"},
-         recorded = {"Common.Runtime", "KeelBase.Host", "KeelBase.Server"},
-         services = {HostVM = {"running", HOST .. "\\HostVM.exe"}}})
-addFile(HOST .. "\\hostvm.xml")
+-- Upgrade with the service running: stopped before extraction, started after, not recreated.
+install({installed = {"Common.Runtime", "KeelBase.Server"}, recorded = {"Common.Runtime", "KeelBase.Server"},
+         services = {KeelBase = {"running", HOST .. "\\KeelHost.exe"}}})
+addFile(HOST .. "\\keelhost.xml")
 addFile(HOST .. "\\keelhost.d\\020-kbase.xml")
 check(runSetup() == true, "upgrade completes")
-check(commandAt("service stop HostVM") == 1, "stopped first: " .. tostring(commands[1]))
-check(commandAt("service install") == nil and commandAt("service start HostVM"), "started again, not recreated")
+check(commandAt("service stop KeelBase") == 1, "stopped first: " .. tostring(commands[1]))
+check(commandAt("service install") == nil and commandAt("service start KeelBase"), "started again, not recreated")
 check(commandAt("copy") == nil, "site config and fragment kept")
--- An administrator's stopped service: the database alone is upgraded and it stays stopped.
-install({args = {components = "KeelBase.Server"}, installed = {"Common.Runtime", "KeelBase.Host", "KeelBase.Server"},
-         recorded = {"Common.Runtime", "KeelBase.Server"}, services = {HostVM = {"stopped", HOST .. "\\HostVM.exe"}}})
-addFile(HOST .. "\\hostvm.xml")
-check(runSetup() == true and commandAt("\" service") == nil, "stopped service left stopped")
+-- A stopped service is not stopped again, and starts with the upgraded files.
+install({installed = {"Common.Runtime", "KeelBase.Server"}, recorded = {"Common.Runtime", "KeelBase.Server"},
+         services = {KeelBase = {"stopped", HOST .. "\\KeelHost.exe"}}})
+addFile(HOST .. "\\keelhost.xml")
+check(runSetup() == true and commandAt("service stop") == nil and commandAt("service start KeelBase"), "stopped service started")
 -- The tools alone do not touch the service.
-install({args = {components = "KeelBase.Tools"}, installed = {"KeelBase.Host", "KeelBase.Server"},
-         services = {HostVM = {"running", HOST .. "\\HostVM.exe"}}})
-check(runSetup() == true and commandAt("\" service") == nil, "tools leave the service alone")
+install({args = {components = "KeelBase.Tools"}, installed = {"KeelBase.Server"},
+         services = {KeelBase = {"running", HOST .. "\\KeelHost.exe"}}})
+check(runSetup() == true and commandAt(SERVICE_COMMAND) == nil, "tools leave the service alone")
 check(ui.visible["pathbtn"] ~= false, "PATH option offered with the tools")
 _FinishInstall()
-check(commandAt("path " .. ROOT .. "\\KeelBase") == nil, "PATH unchanged unless asked")
+check(commandAt("path ") == nil, "PATH unchanged unless asked")
 ui.selected["pathbtn"] = true
 _FinishInstall()
-check(commandAt("path " .. ROOT .. "\\KeelBase"), "PATH entry added when asked")
+check(commandAt("path " .. INSTALL .. "\\Tools"), "Tools added to PATH when asked")
 install({args = {components = "KeelBase.Server"}})
 runSetup()
 check(ui.visible["pathbtn"] == false, "no PATH option without the tools")
@@ -348,35 +345,33 @@ check(ui.visible["pathbtn"] == false, "no PATH option without the tools")
 ----------------------------------------------------------------------------------------------------
 -- KeelHost config and the instance fragment
 
--- keelhost.xml is the site's main config: no hostvm.xml next to it (KeelHost refuses both).
+-- hostvm.xml is a main config too: no keelhost.xml next to it (KeelHost refuses both).
+install()
+addFile(HOST .. "\\hostvm.xml")
+check(runSetup() == true and commandAt("keelhost.xml") == nil, "hostvm.xml kept, no keelhost.xml")
+-- The site declared kbase01 in keelhost.xml already: no fragment, no error.
 install()
 addFile(HOST .. "\\keelhost.xml")
-check(runSetup() == true and commandAt("hostvm.xml") == nil, "keelhost.xml kept, no hostvm.xml")
--- The site declared kbase01 in hostvm.xml already: no fragment, no error.
-install()
-addFile(HOST .. "\\hostvm.xml")
-subvms[lower(HOST .. "\\hostvm.xml")] = {"zmis", "kbase01"}
+subvms[lower(HOST .. "\\keelhost.xml")] = {"kbase01"}
 check(runSetup() == true and commandAt("020-kbase.xml") == nil, "declared instance: no fragment")
--- ... or in a hostvm.d fragment of another product.
+-- ... or in another fragment.
 install()
-addFile(HOST .. "\\hostvm.xml")
-addFile(HOST .. "\\hostvm.d\\100-tjsysid.xml")
-addFile(HOST .. "\\hostvm.d\\150-kb.xml")
-subvms[lower(HOST .. "\\hostvm.d\\150-kb.xml")] = {"kbase01"}
-check(runSetup() == true and commandAt("020-kbase.xml") == nil, "instance in hostvm.d: no fragment")
+addFile(HOST .. "\\keelhost.xml")
+addFile(HOST .. "\\keelhost.d\\010-site.xml")
+subvms[lower(HOST .. "\\keelhost.d\\010-site.xml")] = {"kbase01"}
+check(runSetup() == true and commandAt("020-kbase.xml") == nil, "instance in another fragment: no fragment")
 -- An unreadable config stops the install before any service or registry change.
 install()
-addFile(HOST .. "\\hostvm.xml")
-subvms[lower(HOST .. "\\hostvm.xml")] = false
-check(runSetup() == false, "unreadable hostvm.xml fails")
-check(errors[#errors]:find("hostvm.xml", 1, true) ~= nil and commandAt("reg ") == nil and commandAt("service install") == nil,
+addFile(HOST .. "\\keelhost.xml")
+subvms[lower(HOST .. "\\keelhost.xml")] = false
+check(runSetup() == false, "unreadable keelhost.xml fails")
+check(errors[#errors]:find("keelhost.xml", 1, true) ~= nil and commandAt("reg ") == nil and commandAt(SERVICE_COMMAND) == nil,
       "nothing changed after the failure")
 -- A template that partly clashes with the site config fails.
 install()
-addFile(HOST .. "\\hostvm.xml")
-subvms[lower(HOST .. "\\hostvm.xml")] = {"kbase02"}
+addFile(HOST .. "\\keelhost.xml")
+subvms[lower(HOST .. "\\keelhost.xml")] = {"kbase02"}
 StartSetup()
-addFile(HOST .. "\\HostVM.exe")
 addFile(HOST .. "\\keelhost.d\\020-kbase.xml.template")
 subvms[lower(HOST .. "\\keelhost.d\\020-kbase.xml.template")] = {"kbase01", "kbase02"}
 check(PostSetup() == false and errors[#errors]:find("kbase02", 1, true) ~= nil, "partial clash fails: " .. tostring(errors[#errors]))
@@ -386,7 +381,7 @@ check(PostSetup() == false and errors[#errors]:find("kbase02", 1, true) ~= nil, 
 
 install({vcRuntime = "14.52.37029"})
 runSetup()
-check(commandAt("vc_redist.x64.exe") == nil, "newer VC++ runtime kept")
+check(commandAt("vc_redist.x64.exe") == nil, "same or newer VC++ runtime kept")
 install({vcRuntime = "14.44.35211"})
 runSetup()
 check(commandAt("vc_redist.x64.exe"), "older VC++ runtime upgraded")
@@ -397,89 +392,65 @@ install({args = {s = true}})
 freeBytes = 1024 * MB
 check(runSetup() == false and failed ~= nil and unzipped == nil, "not enough space fails")
 
--- The shared root of another product stays; KeelBase records its own.
-install({args = {path = "D:\\KB"}, sharedRoot = "C:\\TaijiControl"})
-ROOT, HOST = "D:\\KB", "D:\\KB\\HostVM"
+-- Only KeelBase's own keys: the shared root is read for the default path, never written.
+install()
 runSetup()
-check(getReg(SHARED_KEY, "InstallPath") == "C:\\TaijiControl" and commandAt("reg Software\\TaijiControl|InstallPath") == nil,
-      "other product's root kept")
-check(getReg(PRODUCT_KEY, "InstallPath") == "D:\\KB", "KeelBase root recorded")
-check(getReg("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\KeelBase", "UninstallString") == "\"D:\\KB\\KeelBase\\UnInstall.exe\"",
-      "uninstall entry quoted")
-ROOT, HOST = "C:\\Test path\\中文", "C:\\Test path\\中文\\HostVM"
-install({sharedRoot = false})
-ROOT, HOST = "C:\\TaijiControl", "C:\\TaijiControl\\HostVM"
-runSetup()
-check(getReg(SHARED_KEY, "InstallPath") == "C:\\TaijiControl" and getReg("Software\\WOW6432Node\\TaijiControl", "InstallPath") == "C:\\TaijiControl",
-      "shared root written when nobody set it")
+check(commandAt("reg Software\\TaijiControl|") == nil and getReg(SHARED_KEY, "InstallPath") == ROOT, "shared root not written")
+check(getReg(PRODUCT_KEY, "InstallPath") == INSTALL and getReg(PRODUCT_KEY, "ServiceName") == "KeelBase", "KeelBase keys")
+check(getReg(UNINSTALL_KEY, "UninstallString") == "\"" .. INSTALL .. "\\Uninstall\\UnInstall.exe\"", "uninstall entry quoted")
 for _, key in ipairs(ALL) do
     check(getReg(COMPONENTS_KEY, key) ~= nil, "component recorded: " .. key)
 end
-ROOT, HOST = "C:\\Test path\\中文", "C:\\Test path\\中文\\HostVM"
+install({sharedRoot = false})
+INSTALL, HOST = "C:\\TaijiControl\\KeelBase", "C:\\TaijiControl\\KeelBase\\Host"
+runSetup()
+check(getReg(SHARED_KEY, "InstallPath") == nil, "shared root not created either")
+INSTALL, HOST = ROOT .. "\\KeelBase", ROOT .. "\\KeelBase\\Host"
 
 ----------------------------------------------------------------------------------------------------
 -- Uninstall
 
 local function uninstall(options)
     reset(options)
-    for _, key in ipairs(options.installed or {}) do addFile(ROOT .. "\\" .. MARKERS[key]) end
-    addFile(HOST .. "\\hostvm.xml")
+    addFile(HOST .. "\\KeelHost.exe")
+    addFile(HOST .. "\\keelhost.xml")
     addFile(HOST .. "\\keelhost.d\\020-kbase.xml")
-    addFile(HOST .. "\\keelhost.d\\020-kbase.xml.template")
-    addFile(ROOT .. "\\Common\\vcredist\\vc_redist.x64.exe")
-    setReg("SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "Path",
-           "C:\\Windows;" .. ROOT .. "\\KeelBase\\;C:\\Tools")
-    if options.taijimpc6 then
-        setReg("Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\TaiJiMPC6", "DisplayName", "Tai-Ji MPC6")
-    end
-    setReg(PRODUCT_KEY, "ServiceName", options.serviceName or "HostVM")
+    addFile(INSTALL .. "\\Redist\\vc_redist.x64.exe")
+    addFile(INSTALL .. "\\Data\\kbase01\\data\\container_0.raw")
+    setReg(ENV_KEY, "Path", "C:\\Windows;" .. INSTALL .. "\\Tools\\;C:\\Tools")
     assert(loadfile("projects/KeelBaseSetup/UnInstall/res/UnInstall.lua"))()
     OnInitialize()
     commands = {}
     PreSetup()
 end
 
-local EVERYTHING = {"Common.Runtime", "Common.OpcCore", "KeelBase.Host", "KeelBase.Server", "KeelBase.Tools"}
+local EVERYTHING = {"Common.Runtime", "Common.OpcCore", "KeelBase.Server", "KeelBase.Tools"}
 
--- KeelHost of its own: the service goes, and HostVM\ with it; the site's instance data is not there.
-uninstall({installed = EVERYTHING, recorded = EVERYTHING, services = {HostVM = {"running", HOST .. "\\HostVM.exe"}}})
-local stopAt, removeAt = commandAt("service stop HostVM"), commandAt("service remove HostVM")
+uninstall({installed = EVERYTHING, recorded = EVERYTHING, services = {KeelBase = {"running", HOST .. "\\KeelHost.exe"}},
+           sharedRoot = ROOT})
+local stopAt, removeAt = commandAt("service stop KeelBase"), commandAt("service remove KeelBase")
 check(stopAt and removeAt and stopAt < removeAt, "own service stopped and removed")
-check(commandAt("delete " .. HOST .. "\\modules\\KeelBase"), "module deleted")
-check(not exists(HOST), "HostVM deleted")
-check(commandAt("service start") == nil, "not started again")
-check(not exists(ROOT .. "\\Common\\vcredist") and not exists(ROOT .. "\\Common\\opc"), "runtime installers deleted")
-check(getReg(SHARED_KEY, "InstallPath") == nil, "shared root removed with the last product")
-check(registry[PRODUCT_KEY] == nil and registry[COMPONENTS_KEY] == nil, "KeelBase key removed")
-check(registry["software\\microsoft\\windows\\currentversion\\uninstall\\keelbase"] == nil, "uninstall entry removed")
-check(getReg("SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "Path") == "C:\\Windows;C:\\Tools",
-      "PATH entry removed: " .. tostring(getReg("SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment", "Path")))
-
--- Shared with TaijiMPC6 in this root: only the module and the instance config go; the service
--- comes back for TaijiMPC6's instances; Common\ and the shared root stay.
-uninstall({installed = EVERYTHING, recorded = EVERYTHING, taijimpc6 = true,
-           services = {HostVM = {"running", HOST .. "\\HostVM.exe"}}})
-check(commandAt("service stop HostVM") and commandAt("service remove") == nil, "shared service stopped, not removed")
-check(commandAt("service start HostVM") > commandAt("delete " .. HOST .. "\\modules\\KeelBase"), "started again after the module went")
-check(exists(HOST .. "\\HostVM.exe") and exists(HOST .. "\\hostvm.xml"), "shared KeelHost kept")
-check(not exists(HOST .. "\\keelhost.d\\020-kbase.xml") and not exists(HOST .. "\\modules\\KeelBase"), "KeelBase parts removed")
-check(exists(ROOT .. "\\Common\\vcredist") and getReg(SHARED_KEY, "InstallPath") == ROOT, "shared Common and root kept")
--- A stopped shared service stays stopped.
-uninstall({installed = EVERYTHING, recorded = EVERYTHING, taijimpc6 = true,
-           services = {HostVM = {"stopped", HOST .. "\\HostVM.exe"}}})
-check(commandAt("\" service") == nil, "stopped shared service untouched")
--- A KeelHost this setup did not install stays, even without TaijiMPC6.
-uninstall({installed = EVERYTHING, recorded = {"Common.Runtime", "KeelBase.Server"},
-           services = {HostVM = {"running", HOST .. "\\HostVM.exe"}}})
-check(exists(HOST .. "\\HostVM.exe") and commandAt("service remove") == nil and commandAt("service start HostVM"), "foreign KeelHost kept")
+check(not exists(HOST) and not exists(INSTALL .. "\\Tools") and not exists(INSTALL .. "\\Redist"), "program directories deleted")
+check(exists(INSTALL .. "\\Data\\kbase01\\data\\container_0.raw"), "instance data kept")
+check(registry[PRODUCT_KEY] == nil and registry[COMPONENTS_KEY] == nil and registry[UNINSTALL_KEY] == nil, "registry entries removed")
+check(getReg(SHARED_KEY, "InstallPath") == ROOT and commandAt("regdel ") == nil, "shared root untouched")
+check(getReg(ENV_KEY, "Path") == "C:\\Windows;C:\\Tools", "PATH entry removed: " .. tostring(getReg(ENV_KEY, "Path")))
+-- A stopped service is only removed.
+uninstall({installed = EVERYTHING, recorded = EVERYTHING, services = {KeelBase = {"stopped", HOST .. "\\KeelHost.exe"}}})
+check(commandAt("service stop") == nil and commandAt("service remove KeelBase"), "stopped service removed")
 -- A service of that name that runs another installation's KeelHost is not touched.
-uninstall({installed = EVERYTHING, recorded = EVERYTHING,
-           services = {HostVM = {"running", "C:\\TaijiControl\\HostVM\\HostVM.exe"}}})
-check(commandAt("\" service") == nil, "other installation's service untouched")
--- The recorded service name is used.
-uninstall({installed = EVERYTHING, recorded = EVERYTHING, serviceName = "KeelBaseTest",
-           services = {KeelBaseTest = {"running", HOST .. "\\HostVM.exe"}, HostVM = {"running", "C:\\TaijiControl\\HostVM\\HostVM.exe"}}})
-check(commandAt("service stop KeelBaseTest") and commandAt("service remove KeelBaseTest") and commandAt("service stop HostVM") == nil,
-      "recorded service name used")
+uninstall({installed = EVERYTHING, recorded = EVERYTHING, services = {KeelBase = {"running", "D:\\Other\\KeelBase\\Host\\KeelHost.exe"}}})
+check(commandAt(SERVICE_COMMAND) == nil and not exists(HOST), "other installation's service untouched")
+-- The recorded service name is used; TaijiMPC6's HostVM service is never touched.
+uninstall({installed = EVERYTHING, recorded = EVERYTHING, serviceName = "KeelBase2",
+           services = {KeelBase2 = {"running", HOST .. "\\KeelHost.exe"}, HostVM = {"running", ROOT .. "\\HostVM\\HostVM.exe"}}})
+check(commandAt("service stop KeelBase2") and commandAt("service remove KeelBase2") and commandAt("HostVM") == nil,
+      "recorded service name used, HostVM untouched")
+-- PATH without the entry is not rewritten.
+uninstall({installed = EVERYTHING, recorded = EVERYTHING})
+setReg(ENV_KEY, "Path", "C:\\Windows")
+commands = {}
+PreSetup()
+check(commandAt("reg " .. ENV_KEY) == nil, "PATH not rewritten when it has no entry")
 
 print("KeelBaseSetup: " .. count .. " cases passed")

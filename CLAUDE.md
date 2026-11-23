@@ -146,4 +146,4 @@ State is stored in `%TEMP%\InstallXpress\<version>.state` (INI format).
 | `libsrc/InstallXpress/install_base.lua` | Source for the embedded base library |
 | `libsrc/InstallXpress/UnZip7z.cpp` | 7z decompression with progress callbacks |
 | `projects/TaijiMPC/Install/Install.lua` | Reference installation script |
-| `projects/KeelBaseSetup/` | KeelBase installer: KeelHost + the KeelBase module, packaged by `build_KeelBaseSetup.py` (see its README.md) |
+| `projects/KeelBaseSetup/` | KeelBase installer: a KeelHost of its own (service KeelBase, ports 7820/7821) with the KeelBase module, packaged by `build_KeelBaseSetup.py` (see its README.md) |

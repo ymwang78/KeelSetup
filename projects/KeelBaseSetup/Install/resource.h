@@ -23,9 +23,8 @@
 // Component archives (INSTALLSOFT), ten IDs per top-level group of the component page.
 #define IDR_PKG_COMMON_RUNTIME          150
 #define IDR_PKG_COMMON_OPCCORE          151
-#define IDR_PKG_KEELBASE_HOST           160
-#define IDR_PKG_KEELBASE_SERVER         161
-#define IDR_PKG_KEELBASE_TOOLS          162
+#define IDR_PKG_KEELBASE_SERVER         160
+#define IDR_PKG_KEELBASE_TOOLS          161
 #define IDC_STATIC                      -1
 
 // Next default values for new objects

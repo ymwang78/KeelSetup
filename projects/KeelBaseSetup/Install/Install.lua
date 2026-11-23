@@ -1,20 +1,21 @@
 -- KeelBase setup script.
 -- HRootKey, CSIDL, RunBatchFile, ErrorHint are provided by the framework base library.
 --
--- KeelBase runs on Windows as a module of KeelHost (still called HostVM there: HostVM.exe, hostvm.xml,
--- the Windows service HostVM and the directory <InstallPath>\HostVM keep their names for one major
--- version, ymwang78/KeelHost#49). This setup installs:
---   HostVM\                         KeelHost itself and its default site config (KeelBase.Host)
---   HostVM\modules\KeelBase\        the KeelBase module plugin (KeelBase.Server)
---   HostVM\keelhost.d\020-kbase.xml the instance kbase01, from its .template (KeelBase.Server)
---   KeelBase\                       the uninstaller (Common.Runtime) and kbased / kbasecli (KeelBase.Tools)
---   Common\vcredist, Common\opc     the VC++ runtime and the OPC Core Components installers
--- It shares <InstallPath>, HostVM\ and the HostVM service with TaijiMPC6, whose installer seeds the
--- same hostvm.xml and only looks at hostvm.d\, so the KeelBase fragment goes to keelhost.d\.
+-- KeelBase runs on Windows as a module of KeelHost, a LocalSystem Windows service. It gets a KeelHost
+-- of its own, apart from the HostVM service other products (TaijiMPC6) install: its own copy of
+-- KeelHost and zce.dll, its own service (KeelBase) and ports (7820/7821), so that installing,
+-- upgrading or removing either never touches the other. Everything lives in the install path
+-- (default C:\TaijiControl\KeelBase):
+--   Host\                       KeelHost, its config keelhost.xml (seeded from keelhost.default.xml),
+--                               modules\KeelBase\ and keelhost.d\020-kbase.xml (instance kbase01)
+--   Data\                       KeelHost's projects_dir: the instances' homes and data (kept on uninstall)
+--   Tools\                      kbased.exe (and kbasecli.exe when the build has one)
+--   Redist\                     vc_redist.x64.exe, opc\ the OPC Core Components installers
+--   Uninstall\UnInstall.exe
 --
 -- Command line (also for a silent /s install):
---   /path=<dir>         install root instead of the recorded or default one
---   /service=<name>     Windows service name of KeelHost instead of the recorded one or HostVM
+--   /path=<dir>         install path instead of the recorded or default one
+--   /service=<name>     Windows service name of KeelBase's KeelHost instead of the recorded one or KeelBase
 --   /components=<list>  groups ("KeelBase") and items ("KeelBase.Tools") besides the required ones
 
 -- Resource ID constants (mirrors resource.h)
@@ -28,23 +29,24 @@ local RES = {
 local _VERSION = "3.0.0.1"
 local VC_REDIST_VERSION = "14.52.37029.0"
 
-local DEFAULT_ROOT = "C:\\TaijiControl"
-local DEFAULT_SERVICE = "HostVM"
-local SHARED_KEY = "Software\\TaijiControl"            -- InstallPath, shared with TaijiMPC6
+local DEFAULT_PATH = "C:\\TaijiControl\\KeelBase"
+local DEFAULT_SERVICE = "KeelBase"
+local SHARED_KEY = "Software\\TaijiControl"            -- InstallPath: the root other TaijiControl products use
 local PRODUCT_KEY = SHARED_KEY .. "\\KeelBase"          -- InstallPath, Version, ServiceName
 local COMPONENTS_KEY = PRODUCT_KEY .. "\\Components"    -- "Group.Item" = version that installed it
 local UNINST_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\KeelBase"
 
--- Files of the HostVM directory this setup reads or writes, relative to it.
-local HOST_DEFAULT_CONFIG = "hostvm.default.xml"
-local HOST_CONFIGS = {"hostvm.xml", "keelhost.xml"}     -- main config: KeelHost refuses to start with both
+-- Files of the Host directory this setup reads or writes, relative to it.
+local HOST_EXE = "KeelHost.exe"
+local HOST_DEFAULT_CONFIG = "keelhost.default.xml"
+local HOST_CONFIGS = {"keelhost.xml", "hostvm.xml"}     -- main config: KeelHost refuses to start with both
 local FRAGMENT_DIRS = {"keelhost.d", "hostvm.d"}
 local KBASE_FRAGMENT = "keelhost.d\\020-kbase.xml"
 local KBASE_FRAGMENT_TEMPLATE = KBASE_FRAGMENT .. ".template"
 
-local _dirCompany = DEFAULT_ROOT
-local _dirHostVM = DEFAULT_ROOT .. "\\HostVM"
-local _dirKeelBase = DEFAULT_ROOT .. "\\KeelBase"
+local _dirInstall = DEFAULT_PATH
+local _dirHost = DEFAULT_PATH .. "\\Host"
+local _dirTools = DEFAULT_PATH .. "\\Tools"
 local _serviceName = DEFAULT_SERVICE
 
 local _bCustomPath = false
@@ -139,9 +141,9 @@ local function Join(dir, name)
 end
 
 function ResetInstallPath(installPath)
-    _dirCompany = NormalizePath(installPath)
-    _dirHostVM = Join(_dirCompany, "HostVM")
-    _dirKeelBase = Join(_dirCompany, "KeelBase")
+    _dirInstall = NormalizePath(installPath)
+    _dirHost = Join(_dirInstall, "Host")
+    _dirTools = Join(_dirInstall, "Tools")
 end
 
 local function NonEmpty(value)
@@ -151,13 +153,14 @@ local function NonEmpty(value)
     return value
 end
 
--- /path=, else where this setup installed KeelBase before, else the root other TaijiControl products
--- use, so that they share one HostVM directory and service, else the default.
+-- /path=, else where this setup installed KeelBase before, else KeelBase\ in the root other
+-- TaijiControl products use, else the default.
 function DefaultInstallPath()
+    local sharedRoot = NonEmpty(installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, SHARED_KEY, "InstallPath"))
     return NonEmpty(installx.SysGetArg("path"))
         or NonEmpty(installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, PRODUCT_KEY, "InstallPath"))
-        or NonEmpty(installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, SHARED_KEY, "InstallPath"))
-        or DEFAULT_ROOT
+        or (sharedRoot and Join(NormalizePath(sharedRoot), "KeelBase"))
+        or DEFAULT_PATH
 end
 
 function DefaultServiceName()
@@ -176,33 +179,29 @@ end
 --
 -- The component page lists these groups and items. Every item is one INSTALLSOFT archive (res: its
 -- ID in resource.h, file name in Install.rc); archives keep their paths relative to the install
--- root, so the installed layout does not depend on what was selected. A group only gathers its
+-- path, so the installed layout does not depend on what was selected. A group only gathers its
 -- items. The skin's controls are grp_<group> and item_<group>_<item>.
 --   required  always installed; its checkbox is disabled
 --   deps      items it cannot run without. Selecting it also selects those that are not
 --             installed yet; deselecting one of those also deselects it
---   marker    path under the install root that exists once the item is installed
+--   marker    path under the install path that exists once the item is installed
 -- An item whose archive this installer does not carry (installx.PackageInfo returns nil) is hidden.
 local COMPONENTS = {
     { id = "Common", name = {"公共组件", "Common"}, items = {
-        { id = "Runtime", res = 150, required = true, marker = "KeelBase\\UnInstall.exe",
+        { id = "Runtime", res = 150, required = true, marker = "Uninstall\\UnInstall.exe",
           name = {"基础运行库", "Runtime"},
           desc = {"VC++ 运行库和卸载程序", "VC++ runtime and the uninstaller"} },
-        { id = "OpcCore", res = 151, marker = "Common\\opc\\GBDA_Install_Prereq_x64.msi",
+        { id = "OpcCore", res = 151, marker = "Redist\\opc\\GBDA_Install_Prereq_x64.msi",
           name = {"OPC 核心组件", "OPC Core Components"},
           desc = {"OPC DA/HDA 接口代理与 OpcEnum。KeelBase 的 OPC DA/HDA 服务和它的客户端都需要",
                   "OPC DA/HDA proxies and OpcEnum, needed by KeelBase's OPC DA/HDA server and its clients"} },
     }},
     { id = "KeelBase", name = {"KeelBase", "KeelBase"}, items = {
-        { id = "Host", res = 160, marker = "HostVM\\HostVM.exe",
-          name = {"KeelHost 服务", "KeelHost service"},
-          desc = {"运行 KeelBase 实例的后台服务（Windows 服务 HostVM）",
-                  "Background service that runs the KeelBase instances (Windows service HostVM)"} },
-        { id = "Server", res = 161, marker = "HostVM\\modules\\KeelBase\\kh_keelbase.dll", deps = {"KeelBase.Host"},
+        { id = "Server", res = 160, marker = "Host\\modules\\KeelBase\\kh_keelbase.dll",
           name = {"KeelBase 时序数据库", "KeelBase database"},
-          desc = {"KeelBase 模块和默认实例 kbase01（REST 端口 8080，数据端口 9090）",
-                  "The KeelBase module and the default instance kbase01 (REST port 8080, data port 9090)"} },
-        { id = "Tools", res = 162, marker = "KeelBase\\kbased.exe",
+          desc = {"KeelBase 专用的 KeelHost 服务（Windows 服务 KeelBase，端口 7820/7821）、KeelBase 模块和默认实例 kbase01（REST 端口 8080，数据端口 9090）",
+                  "KeelBase's own KeelHost service (Windows service KeelBase, ports 7820/7821), the KeelBase module and the default instance kbase01 (REST port 8080, data port 9090)"} },
+        { id = "Tools", res = 161, marker = "Tools\\kbased.exe",
           name = {"命令行工具", "Command-line tools"},
           -- kbasecli.exe goes along when the build has one (KeelBase has no Windows project for it yet).
           desc = {"独立运行的 kbased 等命令行工具", "Standalone kbased and other command-line tools"} },
@@ -246,7 +245,7 @@ end
 
 function RefreshInstalledComponents()
     for _, item in ipairs(_order) do
-        _installed[item.key] = installx.FilePathExists(Join(_dirCompany, item.marker)) == true
+        _installed[item.key] = installx.FilePathExists(Join(_dirInstall, item.marker)) == true
         if LockedState(item) ~= nil or item.info == nil then
             _selected[item.key] = (LockedState(item) == true and item.info ~= nil) or nil
         end
@@ -256,7 +255,7 @@ end
 -- Components this setup recorded when it installed KeelBase into the current install path.
 local function RecordedComponents()
     local recorded, any = {}, false
-    if not SamePath(installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, PRODUCT_KEY, "InstallPath"), _dirCompany) then
+    if not SamePath(installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, PRODUCT_KEY, "InstallPath"), _dirInstall) then
         return recorded, false
     end
     for _, item in ipairs(_order) do
@@ -269,9 +268,7 @@ local function RecordedComponents()
 end
 
 -- Reads which archives the installer carries and what is installed, and selects the defaults:
--- everything for a first install, what this setup installed last time for an upgrade. Another
--- product's HostVM in the same directory does not make it an upgrade: the KeelBase module is built
--- against the KeelHost in this package, so the host is selected too.
+-- everything for a first install, what this setup installed last time for an upgrade.
 function LoadComponents()
     _order, _items, _selected, _installed, _hint = {}, {}, {}, {}, nil
     for _, group in ipairs(COMPONENTS) do
@@ -453,7 +450,7 @@ function ComponentPlan()
 end
 
 -- Bytes the install path must have free: all of a new component, a tenth of one that is
--- overwritten (only its growth), and room for the KeelBase instance's first data files
+-- overwritten (only its growth), and room for the KeelBase instance's first data files in Data\
 -- (its container and WAL are preallocated: about 4.2 GB with the defaults).
 local INSTANCE_DATA_BYTES = 4500 * MB
 function ComponentSpaceNeeded()
@@ -559,7 +556,7 @@ function RefreshComponentPage()
     installx.DuiText("compbackbtn", _strResource.COMPONENTS_BACK)
     installx.DuiText("comphintlab", _hint or "")
     installx.DuiTextColor("comphintlab", 0xFF5DA5FF)
-    local need, free = ComponentSpaceNeeded(), FreeSpaceAt(_dirCompany)
+    local need, free = ComponentSpaceNeeded(), FreeSpaceAt(_dirInstall)
     installx.DuiText("compspacelab", string.format(_strResource.SPACE_LABEL, FormatSize(need), free and FormatSize(free) or "?"))
     installx.DuiTextColor("compspacelab", (free and free < need) and 0xFFFF0000 or 0xFF7F7F7F)
 end
@@ -589,10 +586,6 @@ local function ShowComponentPage()
     RefreshComponentPage()
 end
 
-local function AddArgError(problems, message)
-    table.insert(problems, message)
-end
-
 function OnInitialize()
 	local acp = installx.SysACP()
 	if acp == 936 then
@@ -605,28 +598,28 @@ function OnInitialize()
 	local problems = {}
 	local path = DefaultInstallPath()
 	if not IsLocalAbsolutePath(path) then
-		AddArgError(problems, _strResource.BAD_PATH .. tostring(path))
-		path = DEFAULT_ROOT
+		table.insert(problems, _strResource.BAD_PATH .. tostring(path))
+		path = DEFAULT_PATH
 	end
 	ResetInstallPath(path)
-	installx.DuiText("pathedit", _dirCompany)
+	installx.DuiText("pathedit", _dirInstall)
 
 	_serviceName = DefaultServiceName()
 	if not ValidServiceName(_serviceName) then
-		AddArgError(problems, _strResource.BAD_SERVICE_NAME .. tostring(_serviceName))
+		table.insert(problems, _strResource.BAD_SERVICE_NAME .. tostring(_serviceName))
 		_serviceName = DEFAULT_SERVICE
 	end
-	installx.LogPrint("Install path " .. _dirCompany .. ", KeelHost service " .. _serviceName)
+	installx.LogPrint("Install path " .. _dirInstall .. ", KeelHost service " .. _serviceName)
 
 	LoadComponents()
 	local arg = installx.SysGetArg("components")
 	if type(arg) == "string" then
 		local unknown, unavailable = ApplyComponentArg(arg)
 		if #unknown > 0 then
-			AddArgError(problems, _strResource.UNKNOWN_COMPONENT .. table.concat(unknown, ", "))
+			table.insert(problems, _strResource.UNKNOWN_COMPONENT .. table.concat(unknown, ", "))
 		end
 		if #unavailable > 0 then
-			AddArgError(problems, _strResource.UNAVAILABLE_COMPONENT .. table.concat(unavailable, ", "))
+			table.insert(problems, _strResource.UNAVAILABLE_COMPONENT .. table.concat(unavailable, ", "))
 		end
 	end
 	if #problems > 0 then
@@ -650,14 +643,14 @@ function OnButtonClick(btnName)
             installx.DuiWindowPos("_MainFrame", 0, 0, 600, 380)
         end
     elseif (btnName == "browfilebtn") then
-        local installPath = installx.FilePathChoose(_strResource.CHOOSE_INSTALL_PATH, _dirCompany)
+        local installPath = installx.FilePathChoose(_strResource.CHOOSE_INSTALL_PATH, _dirInstall)
         if installPath ~= nil and installPath ~= "" then
             if not IsLocalAbsolutePath(installPath) then
                 ErrorHint(_strResource.BAD_PATH .. installPath)
                 return
             end
             ResetInstallPath(installPath)
-            installx.DuiText("pathedit", _dirCompany)
+            installx.DuiText("pathedit", _dirInstall)
             -- Installed components, and so dependencies and space, belong to the install path.
             RefreshInstalledComponents()
             local notes = NewNotes()
@@ -762,7 +755,7 @@ function CheckDiskSpace()
         return false, _strResource.SPACE_NOT_ENOUGH
     end
     -- An unknown free space (the drive cannot be queried) does not block the install.
-    local need, free = ComponentSpaceNeeded(), FreeSpaceAt(_dirCompany)
+    local need, free = ComponentSpaceNeeded(), FreeSpaceAt(_dirInstall)
     if (free ~= nil and free < need) then
         return false, string.format(_strResource.SPACE_HINT, FormatSize(need), FormatSize(free))
     end
@@ -777,9 +770,6 @@ end
 ----------------------------------------------------------------------------------------------------
 -- The KeelHost service
 
-local _hostExisted = false    -- the service existed before this run
-local _restartHost = false    -- it was running and was stopped only to replace files it loads
-
 local function ServiceKey(name)
     return "SYSTEM\\CurrentControlSet\\Services\\" .. name
 end
@@ -788,15 +778,13 @@ local function ServiceExists(name)
     return installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, ServiceKey(name), "") ~= nil
 end
 
--- Whether a service is running (or on its way there). A pause for an upgrade of files it loads
--- restores exactly this: a service an administrator stopped stays stopped.
 local function ServiceRunning(name)
     local state = installx.ServiceState(name)
     return state == "running" or state == "start_pending" or state == "continue_pending"
 end
 
--- The executable a service runs, from its ImagePath: "\"C:\\..\\HostVM.exe\" daemon HostVM", or the
--- same unquoted. nil when there is no such service.
+-- The executable a service runs, from its ImagePath: "\"C:\\..\\KeelHost.exe\" daemon KeelBase", or
+-- the same unquoted. nil when there is no such service.
 function ServiceExecutable(name)
     local image = NonEmpty(installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, ServiceKey(name), "ImagePath"))
     if image == nil then return nil end
@@ -812,31 +800,23 @@ function CheckServiceOwner()
     if exe == nil then
         return true
     end
-    for _, name in ipairs({"HostVM.exe", "KeelHost.exe"}) do
-        if SamePath(exe, Join(_dirHostVM, name)) then return true end
+    for _, name in ipairs({"KeelHost.exe", "HostVM.exe"}) do
+        if SamePath(exe, Join(_dirHost, name)) then return true end
     end
     return false, string.format(_strResource.SERVICE_TAKEN, _serviceName, exe)
 end
 
 local function HostCommand(args, waitSec)
-    installx.LogPrint("HostVM.exe " .. args)
-    installx.ProcessExecute("\"" .. Join(_dirHostVM, "HostVM.exe") .. "\" " .. args, true, waitSec or 60)
+    installx.LogPrint(HOST_EXE .. " " .. args)
+    installx.ProcessExecute("\"" .. Join(_dirHost, HOST_EXE) .. "\" " .. args, true, waitSec or 60)
 end
 
--- Stops the KeelHost service before its files or the KeelBase module it loads are replaced. The
--- service is not removed: an upgrade keeps whatever the site changed in it (account, recovery).
--- "service stop" waits until the service has stopped, workers included.
+-- Stops KeelBase's KeelHost service before its files are replaced. The service is not removed: an
+-- upgrade keeps whatever the site changed in it (account, recovery). "service stop" waits until the
+-- service has stopped, workers included. Nothing else on the machine is stopped.
 function StopSelectedComponents()
-    _hostExisted = ServiceExists(_serviceName)
-    _restartHost = false
-    if not (ComponentSelected("KeelBase.Host") or ComponentSelected("KeelBase.Server")) then
-        return
-    end
-    if _hostExisted then
-        _restartHost = ServiceRunning(_serviceName)
-        if _restartHost then
-            HostCommand("service stop " .. _serviceName, 120)
-        end
+    if ComponentSelected("KeelBase.Server") and ServiceRunning(_serviceName) then
+        HostCommand("service stop " .. _serviceName, 120)
     end
 end
 
@@ -880,11 +860,11 @@ function StartSetup()
         return fail(spaceError)
     end
 
-	installx.LogPrint("Check Exists " .. _dirCompany .. " ...")
-	if not installx.FilePathExists(_dirCompany) then
-		installx.LogPrint("Makedir " .. _dirCompany .. " ...")
-		if (not installx.FilePathMkdir(_dirCompany)) then
-			return fail(_strResource.MKDIR_FAILED .. _dirCompany)
+	installx.LogPrint("Check Exists " .. _dirInstall .. " ...")
+	if not installx.FilePathExists(_dirInstall) then
+		installx.LogPrint("Makedir " .. _dirInstall .. " ...")
+		if (not installx.FilePathMkdir(_dirInstall)) then
+			return fail(_strResource.MKDIR_FAILED .. _dirInstall)
 		end
 	end
 
@@ -915,29 +895,27 @@ function StartSetup()
 			installx.LogPrint("Skip component " .. item.key .. (_installed[item.key] and " (installed, kept as is)" or ""))
 		end
 	end
-	installx.FilePathUnzip(resourceIDs, _dirCompany)
+	installx.FilePathUnzip(resourceIDs, _dirInstall)
 end
 
 ----------------------------------------------------------------------------------------------------
 -- KeelHost configuration
 
--- The package ships HostVM\hostvm.default.xml (the site config seed every product line shares) but
--- never hostvm.xml: once a main config exists it belongs to the site (ports, threads, projects_dir),
--- so an upgrade keeps it. KeelHost reads keelhost.xml or, for one more major version, hostvm.xml,
--- and refuses to start when both exist, so neither is created next to the other. hostvm.xml is the
--- name TaijiMPC6's installer looks for. Returns false after showing the error when a first install
--- cannot get a main config.
+-- The package ships Host\keelhost.default.xml but never keelhost.xml: once a main config exists it
+-- belongs to the site (ports, threads, projects_dir), so an upgrade keeps it. KeelHost refuses to
+-- start when keelhost.xml and the older hostvm.xml both exist, so neither is created next to the
+-- other. Returns false after showing the error when a first install cannot get a main config.
 function InstallHostConfig()
     for _, name in ipairs(HOST_CONFIGS) do
-        local path = Join(_dirHostVM, name)
+        local path = Join(_dirHost, name)
         if installx.FilePathExists(path) then
             installx.LogPrint("Keep existing KeelHost config: " .. path)
             return true
         end
     end
-    local siteConfig = Join(_dirHostVM, HOST_CONFIGS[1])
+    local siteConfig = Join(_dirHost, HOST_CONFIGS[1])
     -- true: fail if it exists, which also protects a config created after the check above.
-    if installx.FilePathCopy(Join(_dirHostVM, HOST_DEFAULT_CONFIG), siteConfig, true) then
+    if installx.FilePathCopy(Join(_dirHost, HOST_DEFAULT_CONFIG), siteConfig, true) then
         installx.LogPrint("Created KeelHost config from " .. HOST_DEFAULT_CONFIG)
         return true
     end
@@ -951,7 +929,7 @@ end
 function DeclaredSubvmNames()
     local declared = {}
     for _, name in ipairs(HOST_CONFIGS) do
-        local path = Join(_dirHostVM, name)
+        local path = Join(_dirHost, name)
         if installx.FilePathExists(path) then
             local names = installx.HostVMSubvmNames(path, false)
             if names == nil then return nil, path end
@@ -959,7 +937,7 @@ function DeclaredSubvmNames()
         end
     end
     for _, dir in ipairs(FRAGMENT_DIRS) do
-        local directory = Join(_dirHostVM, dir)
+        local directory = Join(_dirHost, dir)
         if installx.FilePathExists(directory) then
             local files = installx.FilePathListFiles(directory)
             if files == nil then return nil, directory end
@@ -979,13 +957,13 @@ end
 
 -- The instance kbase01 comes from keelhost.d\020-kbase.xml.template, copied to 020-kbase.xml on the
 -- first install. An existing 020-kbase.xml is the site's (it may have been edited) and is kept.
--- When the site already declares every subvm of the template elsewhere (in hostvm.xml, say), the
+-- When the site already declares every subvm of the template elsewhere (in keelhost.xml, say), the
 -- fragment is not created: KeelHost refuses to start when a fragment repeats a declared name. Only
 -- some of them declared is a conflict this setup cannot resolve. Returns false after showing the
 -- error.
 function InstallKeelBaseFragment()
-    local fragment = Join(_dirHostVM, KBASE_FRAGMENT)
-    local template = Join(_dirHostVM, KBASE_FRAGMENT_TEMPLATE)
+    local fragment = Join(_dirHost, KBASE_FRAGMENT)
+    local template = Join(_dirHost, KBASE_FRAGMENT_TEMPLATE)
     if installx.FilePathExists(fragment) then
         installx.LogPrint("Keep existing KeelBase instance config: " .. fragment)
         return true
@@ -1031,7 +1009,7 @@ end
 ----------------------------------------------------------------------------------------------------
 -- Runtimes
 
--- Numeric fields of a dotted version ("14.52.37025.0" -> {14, 52, 37025, 0}), or nil.
+-- Numeric fields of a dotted version ("14.52.37029.0" -> {14, 52, 37029, 0}), or nil.
 local function ParseVersion(text)
     if type(text) ~= "string" then
         return nil
@@ -1086,7 +1064,7 @@ function InstallVcRuntime()
         installx.LogPrint("Skip VC++ runtime, " .. installed .. " installed")
         return
     end
-    installx.ProcessExecute("\"" .. _dirCompany .. "\\Common\\vcredist\\vc_redist.x64.exe\" /install /quiet /norestart", true, 300)
+    installx.ProcessExecute("\"" .. Join(_dirInstall, "Redist\\vc_redist.x64.exe") .. "\" /install /quiet /norestart", true, 300)
 end
 
 -- OPC core components come in two Graybox packages, one per bitness, and each carries what the
@@ -1146,7 +1124,7 @@ local function OpcEnumUsable()
 end
 
 function InstallOpcCoreComponents()
-    local opcDir = _dirCompany .. "\\Common\\opc\\"
+    local opcDir = Join(_dirInstall, "Redist\\opc\\")
     if OpcProxiesUsable("") then
         installx.LogPrint("Skip OPC core components x64, already registered")
     else
@@ -1166,21 +1144,13 @@ local function Progress(percent)
 	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
 end
 
-local function SetBothViews(path, name, value)
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\" .. path, name, value)
-    installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\WOW6432Node\\" .. path, name, value)
-end
-
+-- Only KeelBase's own keys: the root other TaijiControl products share (Software\TaijiControl\
+-- InstallPath) is read for the default path but never written.
 function WriteRegistry()
-    -- The shared root is the default of every TaijiControl installer. It is written when no other
-    -- product has set it; a different root of another product stays: it is where its HostVM is.
-    if NonEmpty(installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, SHARED_KEY, "InstallPath")) == nil then
-        SetBothViews("TaijiControl", "InstallPath", _dirCompany)
-    end
     local function set(name, value)
         installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, PRODUCT_KEY, name, value)
     end
-    set("InstallPath", _dirCompany)
+    set("InstallPath", _dirInstall)
     set("Version", _VERSION)
     set("ServiceName", _serviceName)
     for _, item in ipairs(_order) do
@@ -1189,7 +1159,7 @@ function WriteRegistry()
         end
     end
 
-    local uninstaller = Join(_dirKeelBase, "UnInstall.exe")
+    local uninstaller = Join(_dirInstall, "Uninstall\\UnInstall.exe")
     local function uninst(name, value)
         installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, UNINST_KEY, name, value)
     end
@@ -1197,7 +1167,7 @@ function WriteRegistry()
     uninst("DisplayVersion", _VERSION)
     uninst("Publisher", "Tai-Ji Soft")
     uninst("DisplayIcon", uninstaller)
-    uninst("InstallLocation", _dirCompany)
+    uninst("InstallLocation", _dirInstall)
     uninst("UninstallString", "\"" .. uninstaller .. "\"")
 end
 
@@ -1206,16 +1176,12 @@ end
 -- selected component; nothing of a component that was not selected is touched.
 function PostSetup()
 
-    local host = ComponentSelected("KeelBase.Host")
     local server = ComponentSelected("KeelBase.Server")
 
     -- Without a main config KeelHost cannot start, and without its fragment the instance is not
     -- there. Checking them first means a failure stops before any runtime, registry or service is
     -- touched.
-    if host and not InstallHostConfig() then
-        return false
-    end
-    if server and not InstallKeelBaseFragment() then
+    if server and (not InstallHostConfig() or not InstallKeelBaseFragment()) then
         return false
     end
 
@@ -1231,10 +1197,10 @@ function PostSetup()
     WriteRegistry()
 
 	Progress(98)
-    if host and not ServiceExists(_serviceName) then
-        HostCommand("service install " .. _serviceName, 60)
-    end
-    if host or _restartHost then
+    if server then
+        if not ServiceExists(_serviceName) then
+            HostCommand("service install " .. _serviceName, 60)
+        end
         HostCommand("service start " .. _serviceName, 120)
     end
 
@@ -1250,7 +1216,7 @@ end
 
 function _FinishInstall()
     if installx.DuiOptionSelect("pathbtn") then
-        local ok, errdesc = installx.SysPathAdd(_dirKeelBase)
+        local ok, errdesc = installx.SysPathAdd(_dirTools)
         if not ok then
             installx.LogPrint(errdesc)
         end
@@ -1259,6 +1225,6 @@ end
 
 function QueryByKey(keyName)
     if (keyName == "InstallPath") then
-        return _dirCompany
+        return _dirInstall
     end
 end
