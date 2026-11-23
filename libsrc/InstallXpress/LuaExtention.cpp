@@ -5,6 +5,8 @@
 #include "Utility/TypeConvertUtil.h"
 #include "LuaExtention.h"
 #include "HostVMConfig.h"
+#include "RegistryValue.h"
+#include "FileSecurity.h"
 #include <ShlObj_core.h>
 #include <sstream>
 #include <iostream>
@@ -646,6 +648,38 @@ static int l_HostVMSubvmNames(lua_State* L)
     return 1;
 }
 
+// FilePathSecure(path, usersCanRead[, privateSubdirs]): makes path (created as needed) a directory
+// only SYSTEM and Administrators can change, for a LocalSystem service to run from; the names in
+// the optional table privateSubdirs ({"Data"}) give Users no access at any point. See
+// secureDirectory() in FileSecurity.h. Returns true, or false, the path that made it refuse and a
+// Win32 error code (ERROR_REPARSE_POINT_ENCOUNTERED for a junction or link, ERROR_INVALID_OWNER for
+// something another user owns, ERROR_BAD_PATHNAME for anything but an absolute path on a drive).
+static int l_FilePathSecure(lua_State* L)
+{
+    const char* path = luaL_checkstring(L, 1);
+    const bool usersCanRead = lua_toboolean(L, 2) != 0;
+    std::vector<std::wstring> privateSubdirs;
+    if (lua_istable(L, 3)) {
+        const lua_Integer count = luaL_len(L, 3);
+        for (lua_Integer i = 1; i <= count; ++i) {
+            lua_rawgeti(L, 3, i);
+            if (lua_isstring(L, -1))
+                privateSubdirs.push_back(Utf82Unicode(lua_tostring(L, -1)));
+            lua_pop(L, 1);
+        }
+    }
+    APPLOG(LOG_TRACE)("%s: %s, users %s, %d private\n", "FilePathSecure", path, usersCanRead ? "read" : "none",
+                      (int)privateSubdirs.size());
+    SecureDirectoryResult result = secureDirectory(Utf82Unicode(path), usersCanRead, privateSubdirs);
+    lua_pushboolean(L, result.ok);
+    if (result.ok)
+        return 1;
+    APPLOG(LOG_ERROR)("FilePathSecure refused %s: error %lu\n", UnicodeToUtf8(result.problem).c_str(), result.error);
+    lua_pushstring(L, UnicodeToUtf8(result.problem).c_str());
+    lua_pushinteger(L, result.error);
+    return 3;
+}
+
 // Unlike recursive FilePathMkdir, this fails if another initialization already owns the marker.
 static int l_FilePathCreateDirectory(lua_State* L)
 {
@@ -957,32 +991,22 @@ static int l_RunAsAdmin(lua_State * L)
 }
 
 
-// Pushes value `name` of an open key: REG_DWORD as an integer, REG_SZ as a string, anything else
-// (including a missing value) as nil. An empty name reads the key's default value.
+// Pushes value `name` of an open key: REG_DWORD as an integer, REG_SZ and REG_EXPAND_SZ (unexpanded)
+// as a string of any length, anything else (including a missing value) as nil. An empty name reads
+// the key's default value. See readRegistryValue() in RegistryValue.h.
 static void PushRegistryValue(lua_State* L, HKEY hKey, const std::wstring& name)
 {
-    DWORD lValueType = 0;
-    // One spare wchar_t that RegQueryValueEx never writes keeps an unterminated REG_SZ terminated.
-    unsigned char data[1024 + sizeof(wchar_t)] = { 0 };
-    DWORD dataSize = 1024;
-    if (RegQueryValueEx(hKey, name.c_str(), NULL, &lValueType, (LPBYTE)&data, &dataSize) != ERROR_SUCCESS) {
-        lua_pushnil(L);
-        return;
-    }
-
-    switch (lValueType) {
-    case REG_DWORD: {
-        lua_pushinteger(L, *(DWORD*)data);
+    RegistryValue value = readRegistryValue(hKey, name);
+    switch (value.kind) {
+    case RegistryValue::Number:
+        lua_pushinteger(L, value.number);
         break;
-    }
-    case REG_SZ: {
-        lua_pushstring(L, UnicodeToUtf8((wchar_t*)data).c_str());
+    case RegistryValue::String:
+        lua_pushstring(L, UnicodeToUtf8(value.text).c_str());
         break;
-    }
-    default: {
+    default:
         lua_pushnil(L);
         break;
-    }
     }
 }
 
@@ -1075,14 +1099,17 @@ static int l_RegSetValue(lua_State* L)
 
     HKEY hKey;
 
-    if (RegCreateKeyEx(hKeyRoot, Utf82Unicode(path).c_str(), 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) != ERROR_SUCCESS) {
+    // KEY_READ too: a string value keeps the type it already has (writeRegistryString()).
+    if (RegCreateKeyEx(hKeyRoot, Utf82Unicode(path).c_str(), 0, NULL, REG_OPTION_NON_VOLATILE, KEY_READ | KEY_WRITE, NULL, &hKey, NULL) != ERROR_SUCCESS) {
         lua_pushboolean(L, 0);
         return 1;
     }
 
+    // An integer is a REG_DWORD; a string a REG_SZ, or REG_EXPAND_SZ when the value already is one
+    // (the system PATH).
     if (lua_isinteger(L, 4)) {
         DWORD value = (DWORD)lua_tointeger(L, 4);
-        if (RegSetValueEx(hKey, Utf82Unicode(key).c_str(), 0, REG_SZ, (const BYTE*)value, sizeof(DWORD)) != ERROR_SUCCESS) {
+        if (writeRegistryDword(hKey, Utf82Unicode(key), value) != ERROR_SUCCESS) {
             RegCloseKey(hKey);
             lua_pushboolean(L, 0);
             return 1;
@@ -1090,7 +1117,7 @@ static int l_RegSetValue(lua_State* L)
     }
     else if (lua_isstring(L, 4)) {
         std::wstring value = Utf82Unicode( lua_tostring(L, 4));
-        if (RegSetValueEx(hKey, Utf82Unicode(key).c_str(), 0, REG_SZ, (const BYTE*)value.c_str(), value.size() * 2) != ERROR_SUCCESS) {
+        if (writeRegistryString(hKey, Utf82Unicode(key), value) != ERROR_SUCCESS) {
             RegCloseKey(hKey);
             lua_pushboolean(L, 0);
             return 1;
@@ -1224,6 +1251,17 @@ static int l_SysGetArg(lua_State* L)
     LocalFree(argv);
     if (!found) lua_pushnil(L);
     return 1;
+}
+
+// Sleep(ms): waits ms milliseconds, at most a minute, e.g. between two ServiceState() reads. The
+// UI does not repaint meanwhile, as during any waiting ProcessExecute.
+extern "C"
+static int l_Sleep(lua_State* L)
+{
+    lua_Integer ms = luaL_checkinteger(L, 1);
+    if (ms > 0)
+        ::Sleep(static_cast<DWORD>(ms > 60000 ? 60000 : ms));
+    return 0;
 }
 
 // ServiceState(name): the current state of a Windows service, as "running", "stopped",
@@ -1590,6 +1628,7 @@ static const luaL_Reg reglib[] = {
     {"FilePathListFiles", l_FilePathListFiles},
     {"HostVMSubvmNames", l_HostVMSubvmNames},
     {"FilePathCreateDirectory", l_FilePathCreateDirectory},
+    {"FilePathSecure", l_FilePathSecure},
     {"FilePathGetSpecialLocation", l_FilePathGetSpecialLocation},
     {"FilePathMkdir", l_FilePathMakeDir},
     {"FilePathSaveResource", l_FilePathSaveResource},
@@ -1603,6 +1642,7 @@ static const luaL_Reg reglib[] = {
 
     {"RunAsAdmin", l_RunAsAdmin},
     {"ServiceState", l_ServiceState},
+    {"Sleep", l_Sleep},
     {"SetupFailed", l_SetupFailed},
 
     {"RegGetValue", l_RegGetValue},

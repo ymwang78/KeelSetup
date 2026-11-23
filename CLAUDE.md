@@ -81,7 +81,8 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 |----------|-------------|
 | `FilePathExists(path)` | Check file/dir exists |
 | `FilePathMkdir(path)` | Create directories recursively |
-| `FilePathDelete(path)` | Delete file or directory; read-only files are deleted too |
+| `FilePathDelete(path)` | Delete file or directory; read-only files are deleted too; a junction or link in the tree is removed itself, never followed |
+| `FilePathSecure(path, usersCanRead[, privateSubdirs])` | Create `path` as needed and make it a directory only SYSTEM and Administrators can change (owner Administrators, protected DACL, Users read & execute when `usersCanRead`), for a LocalSystem service to run from; the names in `privateSubdirs` (e.g. `{"Data"}`) give Users no access at any point; refuses a junction on the way or inside, a directory another user owns, and in an existing path any file or directory another user owns: `false, path, win32Error` |
 | `FilePathCopy(src, dst, overwrite)` | Copy file |
 | `FilePathChoose(title, default)` | Browse folder dialog |
 | `FilePathCreateShortCut(lnk, target, workdir, desc)` | Create shell shortcut |
@@ -98,13 +99,14 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 | `RunAsAdmin()` | UAC elevation |
 | `SetupFailed(reason)` | Mark setup as failed (non-zero exit code); a silent `/s` install closes |
 | `ServiceState(name)` | Windows service state: "running", "stopped", "start_pending", ... ; nil if no such service |
+| `Sleep(ms)` | Wait `ms` milliseconds (at most 60000), e.g. between two `ServiceState` reads |
 
 ### Registry
 | Function | Description |
 |----------|-------------|
-| `RegGetValue(root, path, key)` | Read registry value; `key=""` only tests that the key exists |
-| `RegGetDefaultValue(root, path)` | Read a key's default value (REG_SZ/REG_DWORD), nil if missing |
-| `RegSetValue(root, path, key, value)` | Write registry value |
+| `RegGetValue(root, path, key)` | Read registry value: REG_DWORD as a number, REG_SZ and REG_EXPAND_SZ (unexpanded) as a string of any length, nil otherwise; `key=""` only tests that the key exists |
+| `RegGetDefaultValue(root, path)` | Read a key's default value (like RegGetValue), nil if missing |
+| `RegSetValue(root, path, key, value)` | Write registry value: an integer as REG_DWORD, a string as REG_SZ, or REG_EXPAND_SZ when the value already is one (the system PATH) |
 | `RegDeleteValue(root, path, key)` | Delete value |
 | `RegDeleteKey(root, path, key)` | Delete key tree |
 
@@ -146,3 +148,4 @@ State is stored in `%TEMP%\InstallXpress\<version>.state` (INI format).
 | `libsrc/InstallXpress/install_base.lua` | Source for the embedded base library |
 | `libsrc/InstallXpress/UnZip7z.cpp` | 7z decompression with progress callbacks |
 | `projects/TaijiMPC/Install/Install.lua` | Reference installation script |
+| `projects/KeelBaseSetup/` | KeelBase installer: a KeelHost of its own (service KeelBase, ports 7820/7821) with the KeelBase module, packaged by `build_KeelBaseSetup.py` (see its README.md) |

@@ -10,6 +10,7 @@
 #include "MainFrame.h"
 #include "Utility/log.h"
 #include "InstallXpress.h"
+#include "FileSecurity.h"
 
 extern "C"
 BOOL IsRunAsAdmin()
@@ -273,41 +274,12 @@ DWORD ExecuteProcess(const wchar_t* cmd, bool hidden, int wait_second)
     }
 }
 
+// Deletes a directory tree without following the junctions and symbolic links in it; see
+// deleteDirectoryTree() in FileSecurity.h.
 extern "C"
-BOOL DeleteDirectory(const TCHAR* dirPath) 
+BOOL DeleteDirectory(const TCHAR* dirPath)
 {
-    std::wstring searchPath = std::wstring(dirPath) + L"\\*";
-    WIN32_FIND_DATA findData;
-    HANDLE hFind = FindFirstFile(searchPath.c_str(), &findData);
-
-    if (hFind == INVALID_HANDLE_VALUE) {
-        return FALSE;
-    }
-
-    do {
-        if (wcscmp(findData.cFileName, L".") != 0 && wcscmp(findData.cFileName, L"..") != 0) {
-            std::wstring filePath = std::wstring(dirPath) + L"\\" + findData.cFileName;
-
-            if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                if (!DeleteDirectory(filePath.c_str())) {
-                    FindClose(hFind);
-                    return FALSE;
-                }
-            }
-            else {
-                SetFileAttributes(filePath.c_str(), FILE_ATTRIBUTE_NORMAL);
-                if (!DeleteFile(filePath.c_str())) {
-                    FindClose(hFind);
-                    return FALSE;
-                }
-            }
-        }
-    } while (FindNextFile(hFind, &findData) != 0);
-
-    FindClose(hFind);
-
-    SetFileAttributes(dirPath, FILE_ATTRIBUTE_NORMAL);
-    return RemoveDirectory(dirPath) != 0;
+    return deleteDirectoryTree(dirPath) ? TRUE : FALSE;
 }
 
 extern "C"

@@ -1,0 +1,12 @@
+<hostvm_server>
+    <!-- KeelBase's own KeelHost: the site config seed KeelBaseSetup ships as Host\keelhost.default.xml.
+         Install.lua copies it to keelhost.xml only on a first install; from then on keelhost.xml
+         belongs to the site and upgrades keep it.
+         Ports: 7820 (KeelHost control/mesh, TCP; log collector, UDP) and 7821 (events, TCP), apart
+         from the 22500/22501 of the HostVM service other products (TaijiMPC6) install, and from
+         7890/7891, the default proxy ports of Clash. Instance homes and their data go to ..\Data,
+         which the uninstaller keeps. The instance itself is declared in keelhost.d\020-kbase.xml. -->
+    <hostvm_info threadnum="2" loglevel="0" keepdays="3" metadb_path="../Data/subvm.db" projects_dir="../Data"
+                 vmname="zmis" vmpath="_.zmis" vmaddr="" vmport="7820" stormport="7821" />
+    <logcollector_info enable="1" bind_addr="0.0.0.0" bind_port="7820" send_addr="127.0.0.1" send_port="7820" log_path="log" max_datagram="2048" batch_size="8" disk_threads="2" max_file_mb="4" keepdays="7" />
+</hostvm_server>
