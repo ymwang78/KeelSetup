@@ -224,8 +224,10 @@ check(unzipped ~= nil and unzipDir == ROOT, "extracted into the root")
 -- nothing.
 check(secured():find("Projects", 1, true) == nil, "no projects directory before hostvm.xml")
 check(PostSetup() == true, "post setup")
+-- Without access for Users: hostvm.xml may name any directory, and the installer must never give
+-- Users read access to one it did not install.
 local projects = indexOf("secure " .. ROOT .. "\\TaiJiMPC_Projects")
-check(projects ~= nil and count_of("secure " .. ROOT .. "\\TaiJiMPC_Projects") == 1, "projects secured once: " .. secured())
+check(projects ~= nil and count_of("secure " .. ROOT .. "\\TaiJiMPC_Projects private") == 1, "projects secured once: " .. secured())
 check(projects < indexOf("service install HostVM"), "projects secured before the service is installed")
 
 -- An existing root is left as it is: other products live there (KeelBase keeps Users out of its
@@ -247,7 +249,7 @@ scenario({installed = {"Common.Runtime", "TaijiMPC.HostVM", "DataService.Svr"}, 
           info = {projects_dir = "../MyProjects", metadb_path = "../MyProjects/subvm.db"}})
 StartSetup()
 -- The existing hostvm.d\ and data\ need no call of their own.
-check(secured() == "Common,Uninstall,HostVM{hostvm.d},TaiJiDataSvc{data},Tools,MyProjects", "upgrade: " .. secured())
+check(secured() == "Common,Uninstall,HostVM{hostvm.d},TaiJiDataSvc{data},Tools,MyProjects private", "upgrade: " .. secured())
 check(securedFirst(), "upgrade secured first")
 commands = {}
 check(PostSetup() == true and secured() == "", "PostSetup secures nothing more: " .. secured())
@@ -262,18 +264,21 @@ scenario({installed = {"Common.Runtime", "Common.WinPy313", "Common.Ident", "Tai
 StartSetup()
 check(indexOf("secure " .. ROOT .. "\\TaiJiMPC_Projects") < indexOf("--stop HostVM"), "projects before the stop")
 check(securedFirst(), "HostVM upgrade secured first")
-check(PostSetup() == true and count_of("secure " .. ROOT .. "\\TaiJiMPC_Projects") == 1, "projects secured once")
+check(PostSetup() == true and count_of("secure " .. ROOT .. "\\TaiJiMPC_Projects private") == 1, "projects secured once")
 
 -- Where hostvm.xml puts the projects: relative to HostVM\, absolute, slashes either way. Only
 -- directories below the install root are secured (one elsewhere belongs to the site and is logged),
--- and one inside HostVM\ already is.
+-- all without access for Users, and none that is, holds or lies in a component's directory: that is
+-- secured with its component, and securing it again would undo hostvm.d\'s or data\'s DACL (Codex
+-- and Cursor on #20).
 local function projectsFor(info)
     scenario({installed = {"Common.Runtime", "TaijiMPC.HostVM"}, args = {components = "Tool.RUS"}, info = info})
     StartSetup()
     local list = {}
     for path in secured():gmatch("[^,]+") do
         if not ({Common = true, Uninstall = true, ["HostVM{hostvm.d}"] = true, Tools = true})[path] then
-            table.insert(list, path)
+            local name = path:match("^(.*) private$")
+            table.insert(list, name or (path .. " (readable!)"))
         end
     end
     return table.concat(list, ",")
@@ -289,6 +294,14 @@ check(projectsFor({projects_dir = "../P/", metadb_path = "..\\p\\subvm.db"}) == 
 check(projectsFor({projects_dir = ROOT .. "\\Abs"}) == "Abs", "absolute below the root")
 check(projectsFor({projects_dir = "./../Dot"}) == "Dot", "dot components")
 check(projectsFor({projects_dir = "projects", metadb_path = "projects/subvm.db"}) == "", "inside HostVM\\ already secured")
+check(projectsFor({projects_dir = ".", metadb_path = "subvm.db"}) == "" and logged("overlaps"), "HostVM\\ itself not secured again")
+check(projectsFor({projects_dir = "../HostVM/"}) == "", "HostVM\\ by another spelling")
+check(projectsFor({projects_dir = "hostvm.d"}) == "", "hostvm.d")
+check(projectsFor({projects_dir = "../TaiJiDataSvc"}) == "", "another component")
+check(projectsFor({projects_dir = "../TaiJiDataSvc/data"}) == "", "another component's private directory")
+check(projectsFor({projects_dir = "../TaijiMPC6/projects"}) == "", "inside another component")
+check(projectsFor({projects_dir = "../WinPy313"}) == "", "a component that is not installed")
+check(projectsFor({projects_dir = "../KeelBase/Data"}) == "KeelBase\\Data", "another product's directory: only ever without Users")
 check(projectsFor({projects_dir = "D:\\Elsewhere"}) == "" and logged("D:\\Elsewhere is outside"), "outside the root logged")
 check(projectsFor({projects_dir = "..\\..\\Up"}) == "" and logged("is outside"), "above the root")
 check(projectsFor({projects_dir = "\\\\server\\share\\p"}) == "", "UNC")
@@ -347,5 +360,25 @@ OnButtonClick("browfilebtn")
 root, rootExists = "D:\\Chosen", false
 StartSetup()
 check(secured() == ".,Common,Uninstall,Tools" and unzipDir == "D:\\Chosen", "chosen path: " .. secured())
+-- One that is not on a local drive is refused there and the path stays (as in KeelBaseSetup).
+scenario({args = {components = "Tool.RUS"}})
+chosenPath = "\\\\server\\share"
+OnButtonClick("browfilebtn")
+check(QueryByKey("InstallPath") == ROOT and errors[#errors]:find("\\\\server\\share", 1, true) ~= nil, "chosen UNC path refused")
+-- A good path chosen on the page replaces a bad /path, and its error with it (#20 review); a bad
+-- /components still stops the install until the selection is changed.
+scenario({args = {path = "relative", components = "Tool.RUS"}})
+chosenPath = "D:\\Chosen"
+OnButtonClick("browfilebtn")
+root, rootExists = "D:\\Chosen", false
+StartSetup()
+check(unzipped ~= nil and unzipDir == "D:\\Chosen", "bad /path replaced on the page")
+scenario({args = {path = "relative", components = "Tool.RUS,Nonsense"}})
+chosenPath = "D:\\Chosen"
+OnButtonClick("browfilebtn")
+root, rootExists = "D:\\Chosen", false
+StartSetup()
+check(unzipped == nil and errors[#errors]:find("Nonsense", 1, true) ~= nil
+      and errors[#errors]:find("relative", 1, true) == nil, "bad /components still refused: " .. tostring(errors[#errors]))
 
 print("TaijiMPC6 directory security: " .. count .. " cases passed")

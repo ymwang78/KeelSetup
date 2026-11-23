@@ -177,7 +177,14 @@ local _items = {}      -- "Group.Item" -> item
 local _selected = {}   -- "Group.Item" -> true when it is to be installed in this run
 local _installed = {}  -- "Group.Item" -> true when its marker exists under the install path
 local _hint = nil      -- what the last click selected or deselected besides the clicked item
-local _argError = nil  -- unknown names in /components
+local _argError = nil  -- what is wrong with /path and /components; StartSetup refuses while it is set
+local _argProblems = {}  -- its parts, {text = message, path = true for the /path one}
+
+local function SetArgError()
+    local texts = {}
+    for _, problem in ipairs(_argProblems) do table.insert(texts, problem.text) end
+    _argError = #texts > 0 and table.concat(texts, _strResource.HINT_SEP) or nil
+end
 
 local function L(pair)
     return pair[_lang] or pair[1]
@@ -554,11 +561,12 @@ function OnInitialize()
 	installx.LogPrint("ACP: ", acp)
 
 	-- /path=, else the root the TaijiControl products were installed to, else the default. A bad
-	-- /path is replaced by that and reported like a bad /components, so a silent install stops.
-	local problems = {}
+	-- /path is replaced by that and reported like a bad /components, so a silent install stops; on
+	-- the page, choosing a path or changing the selection clears it.
+	_argProblems = {}
 	local path = installx.SysGetArg("path")
 	if type(path) == "string" and path ~= "" and not IsLocalAbsolutePath(path:gsub("/", "\\")) then
-		table.insert(problems, _strResource.BAD_PATH .. path)
+		table.insert(_argProblems, {text = _strResource.BAD_PATH .. path, path = true})
 		path = nil
 	end
 	if type(path) ~= "string" or path == "" then
@@ -576,19 +584,19 @@ function OnInitialize()
 	if type(arg) == "string" then
 		local unknown, unavailable, removed = ApplyComponentArg(arg)
 		for _, msg in ipairs(removed or {}) do
-			table.insert(problems, msg)
+			table.insert(_argProblems, {text = msg})
 		end
 		if #unknown > 0 then
-			table.insert(problems, _strResource.UNKNOWN_COMPONENT .. table.concat(unknown, ", "))
+			table.insert(_argProblems, {text = _strResource.UNKNOWN_COMPONENT .. table.concat(unknown, ", ")})
 		end
 		if #unavailable > 0 then
-			table.insert(problems, _strResource.UNAVAILABLE_COMPONENT .. table.concat(unavailable, ", "))
+			table.insert(_argProblems, {text = _strResource.UNAVAILABLE_COMPONENT .. table.concat(unavailable, ", ")})
 		end
 	end
-	if #problems > 0 then
+	SetArgError()
+	if _argError then
 		-- A silent install refuses to start rather than report success without them; with the
 		-- page the user can correct the selection (and sees the path that replaced a bad /path).
-		_argError = table.concat(problems, _strResource.HINT_SEP)
 		installx.LogPrint(_argError)
 		ErrorHint(_argError)
 	end
@@ -608,8 +616,23 @@ function OnButtonClick(btnName)
     elseif (btnName == "browfilebtn") then
         local installPath = installx.FilePathChoose(_strResource.CHOOSE_INSTALL_PATH, _dirCompany)
         if installPath ~= nil and installPath ~= "" then
-            installx.DuiText("pathedit", installPath)
+            if not IsLocalAbsolutePath(installPath:gsub("/", "\\")) then
+                ErrorHint(_strResource.BAD_PATH .. installPath)
+                return
+            end
             ResetInstallPath(installPath)
+            installx.DuiText("pathedit", _dirCompany)
+            -- The chosen path replaces a bad /path, and so does away with its error.
+            for i = #_argProblems, 1, -1 do
+                if _argProblems[i].path then table.remove(_argProblems, i) end
+            end
+            local hadError = _argError ~= nil
+            SetArgError()
+            if _argError then
+                ErrorHint(_argError)
+            elseif hadError then
+                installx.DuiVisible("errortiplab", false)
+            end
             -- Installed components, and so locks, dependencies and space, belong to the install path.
             RefreshInstalledComponents()
             local notes = NewNotes()
@@ -659,9 +682,10 @@ function OnSelChanged(btnName, isSelected)
         return
     end
     -- The option has already flipped itself; the page is redrawn from the selection either way.
-    -- Once the user picks components, a bad /components argument no longer matters.
+    -- Once the user picks components, a bad /components argument no longer matters (a bad /path
+    -- was already replaced by the recorded or default root, shown on the page).
     if _argError then
-        _argError = nil
+        _argError, _argProblems = nil, {}
         installx.DuiVisible("errortiplab", false)
     end
     local notes = NewNotes()
@@ -873,10 +897,29 @@ local function IsBelow(path, dir)
     return #path > #prefix and path:sub(1, #prefix):lower() == prefix
 end
 
+-- The same directory, one inside the other, or the other way round.
+local function Overlaps(a, b)
+    return a:lower() == b:lower() or IsBelow(a, b) or IsBelow(b, a)
+end
+
+-- The directory of a component (present or not) that path is, holds or lies in; nil for none.
+local function OverlappingComponentDir(path)
+    for _, group in ipairs(COMPONENTS) do
+        for _, item in ipairs(group.items) do
+            for _, dir in ipairs(item.dirs or {}) do
+                local componentDir = _dirCompany .. "\\" .. dir
+                if Overlaps(path, componentDir) then return componentDir end
+            end
+        end
+    end
+    return nil
+end
+
 -- HostVM loads its projects, Python code among them, from projects_dir and keeps their list in
 -- metadb_path, as SYSTEM, and creates them on its first start. hostvm.xml names them relative to
--- HostVM\, where the service runs. Returns the directories below the install root (and outside
--- HostVM\, which is secured with the component); one elsewhere is left to the site and logged.
+-- HostVM\, where the service runs. Returns the directories below the install root; one elsewhere
+-- is left to the site, and one that is, holds or lies in a component's directory is secured with
+-- that component (securing it again would undo hostvm.d\'s or data\'s DACL); both are logged.
 function HostVMProjectDirs()
     local hostvmDir = _dirCompany .. "\\HostVM"
     local config = hostvmDir .. "\\hostvm.xml"
@@ -894,9 +937,12 @@ function HostVMProjectDirs()
                 path = CollapsePath(path)
                 if name == "metadb_path" then path = path:match("^(.*)\\[^\\]+$") end
             end
+            local componentDir = path and OverlappingComponentDir(path)
             if path == nil or not IsBelow(path, _dirCompany) then
                 installx.LogPrint("HostVM " .. name .. " " .. value .. " is outside " .. _dirCompany .. ", not secured")
-            elseif not IsBelow(path, hostvmDir) and not seen[path:lower()] then
+            elseif componentDir then
+                installx.LogPrint("HostVM " .. name .. " " .. value .. " overlaps " .. componentDir .. ", secured as that component")
+            elseif not seen[path:lower()] then
                 seen[path:lower()] = true
                 table.insert(dirs, path)
             end
@@ -907,11 +953,14 @@ function HostVMProjectDirs()
     return dirs
 end
 
+-- Without access for Users: hostvm.xml may name any directory below the root, another product's
+-- among them (KeelBase's Data\), and the installer never gives Users read access to a directory it
+-- did not install. The projects hold their configurations; the client reaches them through HostVM.
 -- Returns true, or false, the path FilePathSecure refused and the Win32 error.
 function SecureHostVMProjects()
     for _, dir in ipairs(HostVMProjectDirs()) do
-        installx.LogPrint("Secure " .. dir .. " ...")
-        local secured, problem, code = installx.FilePathSecure(dir, true)
+        installx.LogPrint("Secure " .. dir .. " (no access for Users) ...")
+        local secured, problem, code = installx.FilePathSecure(dir, false)
         if not secured then
             return false, problem, code
         end
