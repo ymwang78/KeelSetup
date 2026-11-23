@@ -1,4 +1,9 @@
 -- HRootKey, CSIDL, RunBatchFile, ErrorHint are provided by the framework base library.
+--
+-- Command line (also for a silent /s install):
+--   /path=<dir>         install root instead of the recorded one (Software\TaijiControl InstallPath)
+--                       or C:\TaijiControl
+--   /components=<list>  groups ("TaijiMPC") and items ("TaijiSim.PYSim") besides the required ones
 
 -- Resource ID constants (mirrors resource.h)
 local RES = {
@@ -23,7 +28,8 @@ local _strResourceCN = {
 	SPACE_NOT_ENOUGH = "系统空间不足",
 	SPACE_HINT = "安装位置空间不足：需要约 %s，可用 %s，请另外选择安装位置",
 	SPACE_LABEL = "所需空间约 %s，可用 %s",
-	MKDIR_FAILED = "创建目录失败: ",
+	BAD_PATH = "安装路径必须是本机磁盘上的绝对路径: ",
+	UNSAFE_PATH = "无法安全地使用安装目录（%s，错误 %s）：路径上或目录里有链接点，或目录不是管理员创建的。请换一个目录，或删除后重试",
 	LOADING = "正在加载",
 	HOSTVM_CONFIG_FAILED = "无法生成 HostVM 配置文件: ",
 	HOSTVM_STALE_FAILED = "无法删除旧版本留下的 HostVM 文件: ",
@@ -52,7 +58,8 @@ local _strResourceEN = {
 	SPACE_NOT_ENOUGH = "System space is not enough",
 	SPACE_HINT = "Not enough space at the install path: needs about %s, %s free. Please choose another install path",
 	SPACE_LABEL = "Needs about %s, %s free",
-	MKDIR_FAILED = "Make dir failed: ",
+	BAD_PATH = "The install path must be an absolute path on a local drive: ",
+	UNSAFE_PATH = "Cannot use the install path safely (%s, error %s): a junction or link is on the way or inside, or another user created the directory. Choose another path, or delete it and retry",
 	LOADING = "Loading",
 	HOSTVM_CONFIG_FAILED = "Failed to create the HostVM config: ",
 	HOSTVM_STALE_FAILED = "Failed to delete a HostVM file left by an earlier version: ",
@@ -75,8 +82,16 @@ local _strResourceEN = {
 local _strResource = _strResourceCN
 local _lang = 1  -- index into the {Chinese, English} name pairs below
 
+-- An absolute path on a local drive ("C:\\..."): the services run as LocalSystem, which cannot use
+-- a mapped drive or another machine's share.
+local function IsLocalAbsolutePath(path)
+    return tostring(path or ""):match("^%a:\\") ~= nil
+end
+
+-- Paths here are joined as root .. "\\" .. name, so the root keeps no trailing backslash ("D:\\"
+-- becomes "D:"); forward slashes become backslashes.
 function ResetInstallPath(installPath)
-    _dirCompany = installPath
+    _dirCompany = tostring(installPath):gsub("/", "\\"):gsub("\\+$", "")
     _dirExeHomeDir = _dirCompany .. "\\TaiJiMPC6"
     _dirExeFullPath = _dirCompany .. "\\TaiJiMPC6\\TaiJiMPC.exe"
 end
@@ -93,35 +108,44 @@ end
 --                    installed yet; deselecting one of those also deselects it
 --   marker           path under the install root that exists once the item is installed
 --   keepIfInstalled  never extracted over an existing installation (TaiJiDataSvc keeps its database)
+--   dirs             directories under the install root its archive fills; SecureInstallDirectories
+--                    lets only SYSTEM and Administrators change them, Users may read
+--   privateDirs      the same without any access for Users: they hold secrets
 -- An item whose archive this installer does not carry (installx.PackageInfo returns nil) is hidden.
 -- /components=<list> on the command line selects groups ("TaijiMPC") and items ("TaijiSim.PYSim").
 local COMPONENTS = {
     { id = "Common", name = {"公共组件", "Common"}, items = {
-        { id = "Runtime", res = 150, required = true, marker = "Common\\vcredist",
+        { id = "Runtime", res = 150, required = true, marker = "Common\\vcredist", dirs = {"Common", "Uninstall"},
           name = {"基础运行库", "Runtime"},
           desc = {"VC++ 运行库、ICU、OPC 核心组件和卸载程序", "VC++ runtime, ICU, OPC core components and the uninstaller"} },
-        { id = "Ident", res = 151, marker = "Common\\Ident32",
+        { id = "Ident", res = 151, marker = "Common\\Ident32", dirs = {"Common"},
           name = {"辨识组件", "Identification"},
           desc = {"32 位辨识 Worker、它的运行库和加密狗驱动", "32-bit identification worker, its runtime and the Sentinel driver"} },
-        { id = "WinPy313", res = 152, marker = "WinPy313\\python\\python.exe",
+        { id = "WinPy313", res = 152, marker = "WinPy313\\python\\python.exe", dirs = {"WinPy313"},
           name = {"Python 3.13 环境", "Python 3.13"},
           desc = {"WinPy313，含 MPC 算法包", "WinPy313 with the MPC algorithm packages"} },
     }},
     { id = "TaijiMPC", name = {"TaijiMPC", "TaijiMPC"}, items = {
+        -- hostvm.d\100-tjsysid.xml (and its template) carries the identification secret key.
         { id = "HostVM", res = 160, marker = "HostVM\\HostVM.exe", deps = {"Common.WinPy313", "Common.Ident"},
+          dirs = {"HostVM"}, privateDirs = {"HostVM\\hostvm.d"},
           name = {"HostVM 服务", "HostVM service"},
           desc = {"后台服务，运行 MPC 算法与辨识", "Background service running MPC and identification"} },
-        { id = "TaijiMPC6", res = 161, marker = "TaiJiMPC6\\TaiJiMPC.exe",
+        -- Spelled as in the archive, which creates the directory when it is not there.
+        { id = "TaijiMPC6", res = 161, marker = "TaiJiMPC6\\TaiJiMPC.exe", dirs = {"TaijiMPC6"},
           name = {"TaijiMPC6 客户端", "TaijiMPC6 client"},
           desc = {"TaijiMPC6 组态与监控客户端", "TaijiMPC6 configuration and monitoring client"} },
     }},
     { id = "DataService", name = {"DataService", "DataService"}, items = {
+        -- data\ is the PostgreSQL cluster (password hashes, pg_hba.conf); PostgreSQL runs as SYSTEM.
         { id = "Svr", res = 170, marker = "TaiJiDataSvc", keepIfInstalled = true,
+          dirs = {"TaiJiDataSvc"}, privateDirs = {"TaiJiDataSvc\\data"},
           name = {"数据服务 Svr", "Data server"},
           desc = {"TaiJiDataSvc 数据库服务（PostgreSQL）", "TaiJiDataSvc database service (PostgreSQL)"} },
         -- DataCollector.exe (like DataViewer.exe and tsdbAdmin.exe) only launches its .py: it loads
         -- python3.dll from Software\TaijiControl\PythonEnv and calls Py_Main.
         { id = "Client", res = 171, marker = "TaiJiDataClient\\DataCollector.exe", deps = {"Common.WinPy313"},
+          dirs = {"TaiJiDataClient"},
           name = {"数据采集 Client", "Data collector"},
           desc = {"TaiJiDataCollector 采集服务", "TaiJiDataCollector service"} },
     }},
@@ -129,11 +153,12 @@ local COMPONENTS = {
         -- The OPC server taiji-opcsim-server.exe is self-contained, but pySim.exe, which runs the
         -- simulation model, is a pySim.py launcher like DataCollector.exe.
         { id = "PYSim", res = 181, marker = "TaiJiPYSim\\opcserver_win_i386\\taiji-opcsim-server.exe", deps = {"Common.WinPy313"},
+          dirs = {"TaiJiPYSim"},
           name = {"Python 仿真 PYSim", "Python simulator"},
           desc = {"TaiJiPYSim 仿真服务", "TaiJiPYSim simulation service"} },
     }},
     { id = "Tool", name = {"Tool", "Tools"}, items = {
-        { id = "RUS", res = 190, marker = "Tools\\RUS_TJC.exe",
+        { id = "RUS", res = 190, marker = "Tools\\RUS_TJC.exe", dirs = {"Tools"},
           name = {"RUS_TJC 授权工具", "RUS_TJC license tool"},
           desc = {"加密狗授权更新工具", "Sentinel license update tool"} },
     }},
@@ -519,12 +544,6 @@ local function ShowComponentPage()
 end
 
 function OnInitialize()
-    _dirCompany = installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\TaijiControl", "InstallPath")
-    if (_dirCompany == nil or _dirCompany == "") then
-        _dirCompany = "C:\\TaijiControl"
-    end
-    ResetInstallPath(_dirCompany)
-    installx.DuiText("pathedit", _dirCompany)
 	local acp = installx.SysACP()
 	if acp == 936 then
 		_strResource, _lang = _strResourceCN, 1
@@ -533,11 +552,28 @@ function OnInitialize()
 	end
 	installx.LogPrint("ACP: ", acp)
 
+	-- /path=, else the root the TaijiControl products were installed to, else the default. A bad
+	-- /path is replaced by that and reported like a bad /components, so a silent install stops.
+	local problems = {}
+	local path = installx.SysGetArg("path")
+	if type(path) == "string" and path ~= "" and not IsLocalAbsolutePath(path:gsub("/", "\\")) then
+		table.insert(problems, _strResource.BAD_PATH .. path)
+		path = nil
+	end
+	if type(path) ~= "string" or path == "" then
+		path = installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, "Software\\TaijiControl", "InstallPath")
+	end
+	if type(path) ~= "string" or path == "" then
+		path = "C:\\TaijiControl"
+	end
+	ResetInstallPath(path)
+	installx.DuiText("pathedit", _dirCompany)
+	installx.LogPrint("Install path " .. _dirCompany)
+
 	LoadComponents()
 	local arg = installx.SysGetArg("components")
 	if type(arg) == "string" then
 		local unknown, unavailable, removed = ApplyComponentArg(arg)
-		local problems = {}
 		for _, msg in ipairs(removed or {}) do
 			table.insert(problems, msg)
 		end
@@ -547,13 +583,13 @@ function OnInitialize()
 		if #unavailable > 0 then
 			table.insert(problems, _strResource.UNAVAILABLE_COMPONENT .. table.concat(unavailable, ", "))
 		end
-		if #problems > 0 then
-			-- A silent install refuses to start rather than report success without them; with
-			-- the page the user can correct the selection.
-			_argError = table.concat(problems, _strResource.HINT_SEP)
-			installx.LogPrint(_argError)
-			ErrorHint(_argError)
-		end
+	end
+	if #problems > 0 then
+		-- A silent install refuses to start rather than report success without them; with the
+		-- page the user can correct the selection (and sees the path that replaced a bad /path).
+		_argError = table.concat(problems, _strResource.HINT_SEP)
+		installx.LogPrint(_argError)
+		ErrorHint(_argError)
 	end
 	RefreshComponentPage()
 end
@@ -797,6 +833,135 @@ local function SetupComponentService(key, waitSec)
     end
 end
 
+----------------------------------------------------------------------------------------------------
+-- Directory security
+--
+-- The components run as SYSTEM (the HostVM, TaiJiDataSvc, TaiJiDataCollector and TaiJiOPCSim
+-- services, and the WinPy313 and Common\Ident32 code they load), elevated (Uninstall\UnInstall.exe,
+-- the installers in Common\) or for every user at logon (TaiJiMPC6\). Below C:\ every user may create
+-- folders and files, inherited by every new folder, so any user could otherwise add a HostVM module,
+-- a hostvm.d fragment, a Python module or a DLL next to one of them and have it run with those
+-- rights. installx.FilePathSecure creates a directory as needed, refuses a junction on the way or
+-- inside and a directory another user owns, and gives the tree Administrators as owner and a
+-- protected DACL: SYSTEM and Administrators full control, Users read & execute or nothing.
+--
+-- Only the components' own directories are secured, never the whole install root: other products
+-- live there too (KeelBase's C:\TaijiControl\KeelBase keeps Users out of its Data\), and resetting the
+-- root would reset them. A root this run creates is secured itself, so nobody can create what HostVM
+-- or a later component creates in it.
+
+local _projectsSecured = false  -- HostVM's projects directories are secured in this run
+
+-- "C:\\a\\HostVM\\..\\b" -> "C:\\a\\b".
+local function CollapsePath(path)
+    local parts = {}
+    for part in path:gmatch("[^\\]+") do
+        if part == ".." then
+            if #parts > 1 then table.remove(parts) end
+        elseif part ~= "." then
+            table.insert(parts, part)
+        end
+    end
+    return table.concat(parts, "\\")
+end
+
+local function IsBelow(path, dir)
+    local prefix = dir:lower() .. "\\"
+    return #path > #prefix and path:sub(1, #prefix):lower() == prefix
+end
+
+-- HostVM loads its projects, Python code among them, from projects_dir and keeps their list in
+-- metadb_path, as SYSTEM, and creates them on its first start. hostvm.xml names them relative to
+-- HostVM\, where the service runs. Returns the directories below the install root (and outside
+-- HostVM\, which is secured with the component); one elsewhere is left to the site and logged.
+function HostVMProjectDirs()
+    local hostvmDir = _dirCompany .. "\\HostVM"
+    local config = hostvmDir .. "\\hostvm.xml"
+    local dirs, seen = {}, {}
+    for _, name in ipairs({"projects_dir", "metadb_path"}) do
+        local value = installx.HostVMInfoAttribute(config, name)
+        if type(value) == "string" and value ~= "" then
+            local path = value:gsub("/", "\\")
+            if path:match("^\\") or (path:match("^%a:") and not IsLocalAbsolutePath(path)) then
+                path = nil  -- UNC, or relative to a drive's root or current directory: not below the root
+            elseif not IsLocalAbsolutePath(path) then
+                path = hostvmDir .. "\\" .. path
+            end
+            if path then
+                path = CollapsePath(path)
+                if name == "metadb_path" then path = path:match("^(.*)\\[^\\]+$") end
+            end
+            if path == nil or not IsBelow(path, _dirCompany) then
+                installx.LogPrint("HostVM " .. name .. " " .. value .. " is outside " .. _dirCompany .. ", not secured")
+            elseif not IsBelow(path, hostvmDir) and not seen[path:lower()] then
+                seen[path:lower()] = true
+                table.insert(dirs, path)
+            end
+        elseif value == nil then
+            installx.LogPrint("Cannot read " .. name .. " from " .. config)
+        end
+    end
+    return dirs
+end
+
+-- Returns true, or false, the path FilePathSecure refused and the Win32 error.
+function SecureHostVMProjects()
+    for _, dir in ipairs(HostVMProjectDirs()) do
+        installx.LogPrint("Secure " .. dir .. " ...")
+        local secured, problem, code = installx.FilePathSecure(dir, true)
+        if not secured then
+            return false, problem, code
+        end
+    end
+    _projectsSecured = true
+    return true
+end
+
+-- Secures the directories of every component that is selected or already installed (an installed
+-- component left as it is still runs from its directory), before anything is stopped or extracted:
+-- a refused path stops the installation with nothing stopped or extracted (directories secured
+-- before it stay, empty when this run created them). HostVM's projects directories follow when
+-- hostvm.xml already exists, else PostSetup secures them once it has created hostvm.xml.
+-- Returns true, or false, the path FilePathSecure refused and the Win32 error.
+function SecureInstallDirectories()
+    _projectsSecured = false
+    if not installx.FilePathExists(_dirCompany) then
+        installx.LogPrint("Secure new " .. _dirCompany .. " ...")
+        local secured, problem, code = installx.FilePathSecure(_dirCompany, true)
+        if not secured then
+            return false, problem, code
+        end
+    end
+    -- Readable ones first: securing a directory resets everything below it, a private one too.
+    local readable, private, seen = {}, {}, {}
+    for _, item in ipairs(_order) do
+        if ComponentPresent(item.key) then
+            for _, list in ipairs({{item.dirs, readable}, {item.privateDirs, private}}) do
+                for _, dir in ipairs(list[1] or {}) do
+                    if not seen[dir:lower()] then
+                        seen[dir:lower()] = true
+                        table.insert(list[2], dir)
+                    end
+                end
+            end
+        end
+    end
+    for _, list in ipairs({{readable, true}, {private, false}}) do
+        for _, dir in ipairs(list[1]) do
+            local path = _dirCompany .. "\\" .. dir
+            installx.LogPrint("Secure " .. path .. (list[2] and "" or " (no access for Users)") .. " ...")
+            local secured, problem, code = installx.FilePathSecure(path, list[2])
+            if not secured then
+                return false, problem, code
+            end
+        end
+    end
+    if ComponentPresent("TaijiMPC.HostVM") and installx.FilePathExists(_dirCompany .. "\\HostVM\\hostvm.xml") then
+        return SecureHostVMProjects()
+    end
+    return true
+end
+
 function StartSetup()
 
 	installx.LogPrint("Require Admin Promote ...")
@@ -832,13 +997,10 @@ function StartSetup()
         return fail(spaceError)
     end
 
-	installx.LogPrint("Check Exists " .. _dirCompany .. " ...")
-	if not installx.FilePathExists(_dirCompany) then
-		installx.LogPrint("Makedir " .. _dirCompany .. " ...")
-		if (not installx.FilePathMkdir(_dirCompany)) then
-			return fail(_strResource.MKDIR_FAILED .. _dirCompany)
-		end
-	end
+    local secured, problem, code = SecureInstallDirectories()
+    if not secured then
+        return fail(string.format(_strResource.UNSAFE_PATH, tostring(problem), tostring(code)))
+    end
 
     StopSelectedComponents()
 
@@ -1218,6 +1380,15 @@ function PostSetup()
     if hostvm and (not InstallHostVMConfig() or not InstallHostVMFragments()
                    or not RemoveStaleHostVMFiles()) then
         return false
+    end
+    -- A fresh install has hostvm.xml only now; its projects directories are secured before the
+    -- service first starts and creates them.
+    if hostvm and not _projectsSecured then
+        local secured, problem, code = SecureHostVMProjects()
+        if not secured then
+            ErrorHint(string.format(_strResource.UNSAFE_PATH, tostring(problem), tostring(code)))
+            return false
+        end
     end
     -- Likewise for the client, which cannot start without ICU.
     if client and not InstallIcuFallback() then
