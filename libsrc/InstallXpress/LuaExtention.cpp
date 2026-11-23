@@ -667,17 +667,29 @@ static int l_HostVMInfoAttribute(lua_State* L)
     return 1;
 }
 
-// FilePathSecure(path, usersCanRead): makes path (created as needed) a directory only SYSTEM and
-// Administrators can change, for a LocalSystem service to run from; see secureDirectory() in
-// FileSecurity.h. Returns true, or false, the path that made it refuse and a Win32 error code
-// (ERROR_REPARSE_POINT_ENCOUNTERED for a junction or link, ERROR_INVALID_OWNER for a directory
-// another user owns, ERROR_BAD_PATHNAME for anything but an absolute path on a drive).
+// FilePathSecure(path, usersCanRead[, privateSubdirs]): makes path (created as needed) a directory
+// only SYSTEM and Administrators can change, for a LocalSystem service to run from; the names in
+// the optional table privateSubdirs ({"Data"}) give Users no access at any point. See
+// secureDirectory() in FileSecurity.h. Returns true, or false, the path that made it refuse and a
+// Win32 error code (ERROR_REPARSE_POINT_ENCOUNTERED for a junction or link, ERROR_INVALID_OWNER for
+// something another user owns, ERROR_BAD_PATHNAME for anything but an absolute path on a drive).
 static int l_FilePathSecure(lua_State* L)
 {
     const char* path = luaL_checkstring(L, 1);
     const bool usersCanRead = lua_toboolean(L, 2) != 0;
-    APPLOG(LOG_TRACE)("%s: %s, users %s\n", "FilePathSecure", path, usersCanRead ? "read" : "none");
-    SecureDirectoryResult result = secureDirectory(Utf82Unicode(path), usersCanRead);
+    std::vector<std::wstring> privateSubdirs;
+    if (lua_istable(L, 3)) {
+        const lua_Integer count = luaL_len(L, 3);
+        for (lua_Integer i = 1; i <= count; ++i) {
+            lua_rawgeti(L, 3, i);
+            if (lua_isstring(L, -1))
+                privateSubdirs.push_back(Utf82Unicode(lua_tostring(L, -1)));
+            lua_pop(L, 1);
+        }
+    }
+    APPLOG(LOG_TRACE)("%s: %s, users %s, %d private\n", "FilePathSecure", path, usersCanRead ? "read" : "none",
+                      (int)privateSubdirs.size());
+    SecureDirectoryResult result = secureDirectory(Utf82Unicode(path), usersCanRead, privateSubdirs);
     lua_pushboolean(L, result.ok);
     if (result.ok)
         return 1;

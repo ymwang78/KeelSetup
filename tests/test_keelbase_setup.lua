@@ -139,8 +139,9 @@ installx = {
     end,
     ProcessKill = function(name) table.insert(commands, "kill " .. name) return true end,
     FilePathMkdir = function() error("the install path is created by FilePathSecure") end,
-    FilePathSecure = function(path, usersCanRead)
-        table.insert(commands, "secure " .. path .. " users=" .. tostring(usersCanRead))
+    FilePathSecure = function(path, usersCanRead, private)
+        table.insert(commands, "secure " .. path .. " users=" .. tostring(usersCanRead)
+                     .. (private and " private=" .. table.concat(private, ",") or ""))
         if unsafePaths[lower(path)] then return false, path .. "\\junction", 4395 end
         return true
     end,
@@ -369,21 +370,24 @@ check(ui.visible["pathbtn"] == false, "no PATH option without the tools")
 ----------------------------------------------------------------------------------------------------
 -- The install path holds a LocalSystem service: only SYSTEM and Administrators may change it
 
--- Secured before anything else happens, Data\ without even read access for Users.
+-- Secured before anything else happens. Data\ is a private subdirectory of that call, so Users
+-- cannot read it at any point, not even between two calls.
+local SECURE_INSTALL = "secure " .. INSTALL .. " users=true private=Data"
 install({services = {KeelBase = {"running", HOST .. "\\KeelHost.exe"}}, installed = {"KeelBase.Server"},
          recorded = {"Common.Runtime", "KeelBase.Server"}})
-runSetup()
-check(commands[1] == "secure " .. INSTALL .. " users=true", "install path secured first: " .. tostring(commands[1]))
-check(commands[2] == "secure " .. INSTALL .. "\\Data users=false", "then Data\\ without Users: " .. tostring(commands[2]))
--- Tools alone: no Data\ to create ...
-install({args = {components = "KeelBase.Tools"}})
-runSetup()
-check(commandAt("secure " .. INSTALL .. " users=true") and commandAt("\\Data") == nil, "no Data\\ for the tools")
--- ... but an existing one is secured again (the install path's reset reaches it).
-install({args = {components = "KeelBase.Tools"}})
 addFile(INSTALL .. "\\Data\\kbase01\\kbase_server.json")
 runSetup()
-check(commandAt("secure " .. INSTALL .. "\\Data users=false"), "existing Data\\ secured again")
+check(commands[1] == SECURE_INSTALL, "install path secured first, Data\\ private: " .. tostring(commands[1]))
+check(commandAt("\\Data users=") == nil, "an existing Data\\ needs no second call")
+-- A first install creates Data\ for the database with a call of its own.
+install()
+runSetup()
+check(commands[1] == SECURE_INSTALL and commands[2] == "secure " .. INSTALL .. "\\Data users=false",
+      "Data\\ created without Users: " .. tostring(commands[2]))
+-- Tools alone: no Data\ is created; an existing one is still private.
+install({args = {components = "KeelBase.Tools"}})
+runSetup()
+check(commands[1] == SECURE_INSTALL and commandAt("\\Data users=") == nil, "no Data\\ for the tools")
 -- A path FilePathSecure refuses (a junction, another user's directory) stops everything.
 install({args = {s = true}, unsafe = {INSTALL}, services = {KeelBase = {"running", HOST .. "\\KeelHost.exe"}}})
 check(runSetup() == false and unzipped == nil, "unsafe install path refused")

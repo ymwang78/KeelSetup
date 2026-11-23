@@ -144,6 +144,28 @@ TEST_F(SecureDirectoryFixture, WithoutUsersNobodyElseHasAnEntry) {
     EXPECT_EQ(summary.system, (ACCESS_MASK)FILE_ALL_ACCESS);
 }
 
+// Data\ below an install path that Users may read: it ends up protected without Users, the rest
+// with them; a private name must be a plain name.
+TEST_F(SecureDirectoryFixture, PrivateSubdirectoryGetsNoUsersWhileTheRestDoes) {
+    writeFile(base + L"\\tree\\Data\\kbase01\\kbase_server.json");
+    writeFile(base + L"\\tree\\Host\\KeelHost.exe");
+    setSecurity(base + L"\\tree", L"D:(A;OICI;FA;;;BU)", DACL_SECURITY_INFORMATION);
+    SecureDirectoryResult result = secureDirectory(base + L"\\tree", true, {L"Data"});
+    ASSERT_TRUE(result.ok) << result.error;
+    AceSummary data = summarize(base + L"\\tree\\Data");
+    EXPECT_TRUE(data.isProtected);
+    EXPECT_EQ(data.users, 0u);
+    EXPECT_EQ(summarize(base + L"\\tree\\Data\\kbase01\\kbase_server.json").users, 0u);
+    EXPECT_EQ(summarize(base + L"\\tree\\Host\\KeelHost.exe").users, (ACCESS_MASK)(FILE_GENERIC_READ | FILE_GENERIC_EXECUTE));
+    EXPECT_EQ(summarize(base + L"\\tree").users, (ACCESS_MASK)(FILE_GENERIC_READ | FILE_GENERIC_EXECUTE));
+    EXPECT_TRUE(summarize(base + L"\\tree\\Data\\kbase01\\kbase_server.json").ownerIsAdministrators);
+    for (const wchar_t* name : {L"", L"..", L"Data\\kbase01", L"C:"}) {
+        SecureDirectoryResult bad = secureDirectory(base + L"\\tree", true, {name});
+        EXPECT_FALSE(bad.ok) << name;
+        EXPECT_EQ(bad.error, (DWORD)ERROR_BAD_PATHNAME) << name;
+    }
+}
+
 // A junction on the way would make the installer extract, and start a service, somewhere else.
 TEST_F(SecureDirectoryFixture, JunctionInThePathIsRefusedAndNothingIsCreatedBehindIt) {
     ASSERT_TRUE(CreateDirectoryW((base + L"\\real").c_str(), nullptr));
@@ -178,6 +200,28 @@ TEST_F(SecureDirectoryFixture, DirectoryOwnedByAnotherUserIsRefused) {
     EXPECT_FALSE(child.ok);
     EXPECT_EQ(child.problem, base + L"\\foreign");
     EXPECT_FALSE(std::filesystem::exists(base + L"\\foreign\\KeelBase"));
+}
+
+// An administrator's existing directory that kept the inherited DACL of C:\: a user added a
+// keelhost.d fragment before the installer ran. Its owner is that user, so it is refused (named),
+// and the tree is left as it was rather than taken over with the planted file in it.
+TEST_F(SecureDirectoryFixture, FilePlantedByAnotherUserInsideIsRefused) {
+    std::wstring planted = base + L"\\tree\\Host\\keelhost.d\\900-planted.xml";
+    writeFile(planted);
+    setSecurity(planted, L"O:BU", OWNER_SECURITY_INFORMATION);
+    SecureDirectoryResult result = secureDirectory(base + L"\\tree", true);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.error, (DWORD)ERROR_INVALID_OWNER);
+    EXPECT_EQ(result.problem, planted);
+    EXPECT_FALSE(summarize(base + L"\\tree").isProtected);
+    EXPECT_TRUE(std::filesystem::exists(planted));
+    // A directory a user created is refused the same way.
+    std::filesystem::remove(planted);
+    ASSERT_TRUE(CreateDirectoryW((base + L"\\tree\\Host\\modules").c_str(), nullptr));
+    setSecurity(base + L"\\tree\\Host\\modules", L"O:BU", OWNER_SECURITY_INFORMATION);
+    result = secureDirectory(base + L"\\tree", true);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.problem, base + L"\\tree\\Host\\modules");
 }
 
 TEST_F(SecureDirectoryFixture, OnlyAbsoluteDrivePathsAreAccepted) {
