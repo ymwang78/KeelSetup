@@ -81,7 +81,8 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 |----------|-------------|
 | `FilePathExists(path)` | Check file/dir exists |
 | `FilePathMkdir(path)` | Create directories recursively |
-| `FilePathDelete(path)` | Delete file or directory; read-only files are deleted too |
+| `FilePathDelete(path)` | Delete file or directory; read-only files are deleted too; a junction or link in the tree is removed itself, never followed |
+| `FilePathSecure(path, usersCanRead)` | Create `path` as needed and make it a directory only SYSTEM and Administrators can change (owner Administrators, protected DACL, Users read & execute when `usersCanRead`), for a LocalSystem service to run from; refuses a junction on the way or inside and a directory another user owns: `false, path, win32Error` |
 | `FilePathCopy(src, dst, overwrite)` | Copy file |
 | `FilePathChoose(title, default)` | Browse folder dialog |
 | `FilePathCreateShortCut(lnk, target, workdir, desc)` | Create shell shortcut |
@@ -98,6 +99,7 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 | `RunAsAdmin()` | UAC elevation |
 | `SetupFailed(reason)` | Mark setup as failed (non-zero exit code); a silent `/s` install closes |
 | `ServiceState(name)` | Windows service state: "running", "stopped", "start_pending", ... ; nil if no such service |
+| `Sleep(ms)` | Wait `ms` milliseconds (at most 60000), e.g. between two `ServiceState` reads |
 
 ### Registry
 | Function | Description |

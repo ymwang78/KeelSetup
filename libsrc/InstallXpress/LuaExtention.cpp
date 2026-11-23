@@ -6,6 +6,7 @@
 #include "LuaExtention.h"
 #include "HostVMConfig.h"
 #include "RegistryValue.h"
+#include "FileSecurity.h"
 #include <ShlObj_core.h>
 #include <sstream>
 #include <iostream>
@@ -647,6 +648,26 @@ static int l_HostVMSubvmNames(lua_State* L)
     return 1;
 }
 
+// FilePathSecure(path, usersCanRead): makes path (created as needed) a directory only SYSTEM and
+// Administrators can change, for a LocalSystem service to run from; see secureDirectory() in
+// FileSecurity.h. Returns true, or false, the path that made it refuse and a Win32 error code
+// (ERROR_REPARSE_POINT_ENCOUNTERED for a junction or link, ERROR_INVALID_OWNER for a directory
+// another user owns, ERROR_BAD_PATHNAME for anything but an absolute path on a drive).
+static int l_FilePathSecure(lua_State* L)
+{
+    const char* path = luaL_checkstring(L, 1);
+    const bool usersCanRead = lua_toboolean(L, 2) != 0;
+    APPLOG(LOG_TRACE)("%s: %s, users %s\n", "FilePathSecure", path, usersCanRead ? "read" : "none");
+    SecureDirectoryResult result = secureDirectory(Utf82Unicode(path), usersCanRead);
+    lua_pushboolean(L, result.ok);
+    if (result.ok)
+        return 1;
+    APPLOG(LOG_ERROR)("FilePathSecure refused %s: error %lu\n", UnicodeToUtf8(result.problem).c_str(), result.error);
+    lua_pushstring(L, UnicodeToUtf8(result.problem).c_str());
+    lua_pushinteger(L, result.error);
+    return 3;
+}
+
 // Unlike recursive FilePathMkdir, this fails if another initialization already owns the marker.
 static int l_FilePathCreateDirectory(lua_State* L)
 {
@@ -1220,6 +1241,17 @@ static int l_SysGetArg(lua_State* L)
     return 1;
 }
 
+// Sleep(ms): waits ms milliseconds, at most a minute, e.g. between two ServiceState() reads. The
+// UI does not repaint meanwhile, as during any waiting ProcessExecute.
+extern "C"
+static int l_Sleep(lua_State* L)
+{
+    lua_Integer ms = luaL_checkinteger(L, 1);
+    if (ms > 0)
+        ::Sleep(static_cast<DWORD>(ms > 60000 ? 60000 : ms));
+    return 0;
+}
+
 // ServiceState(name): the current state of a Windows service, as "running", "stopped",
 // "start_pending", "stop_pending", "continue_pending", "pause_pending" or "paused"; nil when no
 // service has that name or it cannot be queried.
@@ -1584,6 +1616,7 @@ static const luaL_Reg reglib[] = {
     {"FilePathListFiles", l_FilePathListFiles},
     {"HostVMSubvmNames", l_HostVMSubvmNames},
     {"FilePathCreateDirectory", l_FilePathCreateDirectory},
+    {"FilePathSecure", l_FilePathSecure},
     {"FilePathGetSpecialLocation", l_FilePathGetSpecialLocation},
     {"FilePathMkdir", l_FilePathMakeDir},
     {"FilePathSaveResource", l_FilePathSaveResource},
@@ -1597,6 +1630,7 @@ static const luaL_Reg reglib[] = {
 
     {"RunAsAdmin", l_RunAsAdmin},
     {"ServiceState", l_ServiceState},
+    {"Sleep", l_Sleep},
     {"SetupFailed", l_SetupFailed},
 
     {"RegGetValue", l_RegGetValue},
