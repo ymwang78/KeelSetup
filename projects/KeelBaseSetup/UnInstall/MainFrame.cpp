@@ -262,14 +262,12 @@ void CUninstallMainFrame::UnInstall()
 	int ret = m_bSilent ? IDOK : MessageBox(GetHWND(), hintString, L"提示", MB_OKCANCEL);
 	if (ret == IDCANCEL)
 	{
-        //设置进度条;
-        m_pUnInstallprogress->SetValue(100);
-        CDuiString str;
-        str.Format(_T("卸载取消"));
-        m_pUnInstallprogress->SetText(str.GetData());
-        SetTimer(this->GetHWND(), WMPROGRESSFINISH_TIMER, PORGRESSHIDESEPLEN, 0);
-        return;
-    }
+		// Nothing was uninstalled: close. The finish animation would set m_bUninstall, and its
+		// finish and close buttons would then call ClearUnInstall(), which deletes the uninstaller
+		// and leaves the rest of the installation without one.
+		PostMessage(WM_CLOSE, 0, 0);
+		return;
+	}
 
     // Product-specific cleanup (services, COM, registry, shortcuts, sibling
     // directories) is implemented in UnInstall.lua PreSetup().
@@ -313,7 +311,8 @@ void CUninstallMainFrame::GetUnInstallSize(std::wstring &strFile, int &nUnInstal
 		bRet = ::FindNextFile(hFind, &FindFileData);
 		if (!bRet) break;
 
-		if (FindFileData.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY && !(FindFileData.cFileName[0] == '.'))
+		if (FindFileData.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY && !(FindFileData.cFileName[0] == '.')
+			&& !(FindFileData.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
 		{
 			//如果是一个子目录，用递归继续往深一层找 ;
 			std::wstring strPath(FindFileData.cFileName);
@@ -346,7 +345,16 @@ void CUninstallMainFrame::DeleteAllFile(std::wstring &strFile, int &nCurUnInstal
 		bRet = ::FindNextFile(hFind, &FindFileData);
 		if (!bRet) break;
 
-		if (FindFileData.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY && !(FindFileData.cFileName[0] == '.'))
+		if ((FindFileData.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && !(FindFileData.cFileName[0] == '.'))
+		{
+			// A junction or link: remove the link itself, never what it points at.
+			std::wstring strPath = strFile + FindFileData.cFileName;
+			if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+				RemoveDirectory(strPath.c_str());
+			else
+				DeleteFile(strPath.c_str());
+		}
+		else if (FindFileData.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY && !(FindFileData.cFileName[0] == '.'))
 		{
 			//如果是一个子目录，用递归继续往深一层找 ;
 			std::wstring strPath(FindFileData.cFileName);

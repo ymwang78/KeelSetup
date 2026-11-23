@@ -52,19 +52,27 @@ Clash 系代理软件的默认端口 7890/7891（Clash Verge Rev 是 7897）。�
 
 1. 检查服务名对应的 Windows 服务：不存在，或者运行的就是 `<安装目录>\Host\KeelHost.exe` 才继续；
    属于别处安装时拒绝，既不停也不接管它。其他产品的 HostVM 服务与此无关，不会被碰。
-2. 选了 Server 且服务在运行：`KeelHost.exe service stop <服务>`（等到服务和工作进程都停下）。
+2. 加固安装目录（`installx.FilePathSecure`）：C:\ 默认允许所有用户在下面建目录、建文件，继承下来
+   谁都能往 `Host\keelhost.d\` 放片段、往 `Host\modules\` 放插件，被 KeelHost 以 SYSTEM 加载。所以：
+   路径上或目录里有 junction / 符号链接、目录（或它的上级）的所有者不是 SYSTEM / Administrators /
+   TrustedInstaller / 当前安装的管理员时拒绝安装；否则整棵树所有者改为 Administrators，DACL 改为受保护的
+   SYSTEM 和 Administrators 完全控制、Users 读和执行（显式条目清掉）。`Data\` 再单独加固，Users 没有任何权限
+   （实例的 `kbase_server.json` 里有 token）。
+3. 选了 Server 且服务在运行：`KeelHost.exe service stop <服务>`（等到服务和工作进程都停下）。
    服务不删不重建，现场改过的登录账户、恢复选项都保留。
-3. 解压选中的组件包。
-4. Server：`keelhost.xml` 和 `hostvm.xml` 都不存在时，从 `keelhost.default.xml` 生成 `keelhost.xml`
+4. 解压选中的组件包。
+5. Server：`keelhost.xml` 和 `hostvm.xml` 都不存在时，从 `keelhost.default.xml` 生成 `keelhost.xml`
    （两者同时存在 KeelHost 拒绝启动）；`keelhost.d\020-kbase.xml` 不存在、且现场没在主配置或别的片段里
    声明模板里的 subvm 时从模板生成；只声明了一部分时报错中止。已有的都归现场所有，升级不动。
-5. VC++ 运行库：注册表里的 x64 运行库版本低于随包的 `vc_redist.x64.exe` 时安装。
-6. OpcCore：64 位、32 位两半各自检查（接口代理/存根、OpcEnum 是否已注册且文件在），缺哪半装哪半。
+6. VC++ 运行库：注册表里的 x64 运行库版本低于随包的 `vc_redist.x64.exe` 时安装。
+7. OpcCore：64 位、32 位两半各自检查（接口代理/存根、OpcEnum 是否已注册且文件在），缺哪半装哪半。
    KeelBase 的 OPC DA/HDA 服务和它的客户端都要它；KeelBase 不自带接口代理。
-7. 注册表：只写 `HKLM\Software\TaijiControl\KeelBase`（`InstallPath`、`Version`、`ServiceName`、
+8. 注册表：只写 `HKLM\Software\TaijiControl\KeelBase`（`InstallPath`、`Version`、`ServiceName`、
    `Components\<组件>`）和卸载项 `...\Uninstall\KeelBase`；共享的 `Software\TaijiControl\InstallPath`
    只读不写。
-8. Server：服务不存在时 `service install <服务>`，然后 `service start <服务>`。只装工具时不碰服务。
+9. Server：服务不存在时 `service install <服务>`，然后 `service start <服务>`，再观察 5 秒：服务没在运行
+   （端口被占、现场配置有误）就报安装失败（静默安装退出码 1），提示看 `Host\log`。要观察而不是立刻读状态，
+   是因为 libzce 在 KeelHost 打开端口之前就把服务报成了 RUNNING。只装工具时不碰服务。
 
 完成页可勾选“把命令行工具目录加入 PATH”（`<安装目录>\Tools`）。
 
@@ -87,7 +95,8 @@ UnInstall.exe /s                                               静默卸载
 `<安装目录>\Uninstall\UnInstall.exe`（“应用和功能”里的 KeelBase 指向它，需要管理员权限）：
 
 - 服务运行的是本安装目录的 KeelHost 时，停止并删除它；别处安装的同名服务不碰。
-- 删除 `Host\`、`Tools\`、`Redist\`、`Uninstall\`，只结束本安装目录里的 kbased.exe。
+- 删除 `Host\`、`Tools\`、`Redist\`、`Uninstall\`，只结束本安装目录里的 kbased.exe；目录里的 junction
+  和链接只删链接本身，不跟进去。在确认对话框里取消就直接退出，什么都不删。
 - `Data\`（实例数据）保留；安装目录空了才删除。OPC Core Components 和 VC++ 运行库不卸载。
 - 删除注册表项和 PATH 里的 `<安装目录>\Tools`。
 
@@ -117,8 +126,9 @@ OPC 安装包默认取 `apps/KeelDeck/bin/x64/Common/opc`（与 TaijiMPC6 同一
 lua tests/test_keelbase_setup.lua
 ```
 
-用桩替代 `installx.*`，覆盖默认选择与升级、安装目录和服务名及其命令行、服务归属检查、停启服务的时机、
-`keelhost.xml` / `hostvm.xml` 与实例片段、VC++ 运行库版本判断、注册表（不写共享根）和卸载。
+用桩替代 `installx.*`，覆盖默认选择与升级、安装目录和服务名及其命令行、服务归属检查、目录加固、停启服务的时机
+与启动后的观察、`keelhost.xml` / `hostvm.xml` 与实例片段、VC++ 运行库版本判断、注册表（不写共享根）和卸载。
+框架部分（目录加固、不跟随链接的删除、注册表读写）见 `tests/test_file_security.cpp`、`tests/test_registry_value.cpp`（gtest，需要管理员权限运行）。
 
 ## 已知限制
 
@@ -136,4 +146,9 @@ lua tests/test_keelbase_setup.lua
   HostVM 服务 PID 不变，共享 `InstallPath` 不变；VC++ 运行库与 OPC 核心组件已在，按检查跳过。
 - 不带参数再装一遍：按记录的目录和服务名，服务停→替换→启，没有重建；改过的 `020-kbase.xml` 和写进实例的位号都在。
 - `UnInstall.exe /s`：服务删除，只剩 `Data\`，注册表干净。只装工具再卸载：安装目录整个删掉。
-- 没测：图形界面（两份界面 XML 能解析，静默安装时加载过中文那份）；全新机器上真正安装 VC++ 运行库和 OPC 核心组件。
+- 安装后：安装目录所有者 Administrators、DACL 受保护（SYSTEM / Administrators 完全控制，Users 读和执行），
+  `Data\` 只有 SYSTEM / Administrators；服务运行中再装一遍，重设 ACL 不影响实例，数据都在。
+- 经 junction 的路径安装：退出码 1，日志 `FilePathSecure refused ...: error 4395`，junction 后面什么都没建。
+- 7820 被占时安装：2 秒内退出码 1，提示服务没启动起来；端口空闲时 6 秒装完。
+- 没测：图形界面（两份界面 XML 能解析，静默安装时加载过中文那份；卸载确认框里点取消的那条路径没点过）；
+  全新机器上真正安装 VC++ 运行库和 OPC 核心组件；以普通用户身份实际尝试写入安装目录。

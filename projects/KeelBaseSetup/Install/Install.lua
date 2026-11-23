@@ -60,7 +60,6 @@ local _strResourceCN = {
 	SPACE_NOT_ENOUGH = "系统空间不足",
 	SPACE_HINT = "安装位置空间不足：需要约 %s，可用 %s，请另外选择安装位置",
 	SPACE_LABEL = "所需空间约 %s，可用 %s",
-	MKDIR_FAILED = "创建目录失败: ",
 	LOADING = "正在加载",
 	HOST_CONFIG_FAILED = "无法生成 KeelHost 配置文件: ",
 	FRAGMENT_FAILED = "无法生成 KeelBase 实例配置: ",
@@ -68,6 +67,8 @@ local _strResourceCN = {
 	SERVICE_TAKEN = "Windows 服务 %s 属于另一处安装（%s），请安装到那个目录，或用 /service= 换一个服务名",
 	BAD_SERVICE_NAME = "服务名只能包含字母、数字、点、下划线和减号: ",
 	BAD_PATH = "安装路径必须是本机磁盘上的绝对路径: ",
+	UNSAFE_PATH = "无法安全地使用安装目录（%s，错误 %s）：路径上或目录里有链接点，或目录不是管理员创建的。请换一个目录，或删除后重试",
+	SERVICE_NOT_STARTED = "KeelBase 服务 %s 没有启动起来（状态 %s），请查看 %s 下的日志",
 	REQUIRED = "必装",
 	INSTALLED = "已安装",
 	INSTALLED_VERSION = "已安装版本 %s",
@@ -90,7 +91,6 @@ local _strResourceEN = {
 	SPACE_NOT_ENOUGH = "System space is not enough",
 	SPACE_HINT = "Not enough space at the install path: needs about %s, %s free. Please choose another install path",
 	SPACE_LABEL = "Needs about %s, %s free",
-	MKDIR_FAILED = "Make dir failed: ",
 	LOADING = "Loading",
 	HOST_CONFIG_FAILED = "Failed to create the KeelHost config: ",
 	FRAGMENT_FAILED = "Failed to create the KeelBase instance config: ",
@@ -98,6 +98,8 @@ local _strResourceEN = {
 	SERVICE_TAKEN = "The Windows service %s belongs to another installation (%s). Install into that directory, or choose another service name with /service=",
 	BAD_SERVICE_NAME = "A service name may only contain letters, digits, dots, underscores and dashes: ",
 	BAD_PATH = "The install path must be an absolute path on a local drive: ",
+	UNSAFE_PATH = "Cannot use the install path safely (%s, error %s): a junction or link is on the way or inside, or another user created the directory. Choose another path, or delete it and retry",
+	SERVICE_NOT_STARTED = "The KeelBase service %s did not start (state %s); see the logs in %s",
 	REQUIRED = "required",
 	INSTALLED = "installed",
 	INSTALLED_VERSION = "Installed version %s",
@@ -806,9 +808,40 @@ function CheckServiceOwner()
     return false, string.format(_strResource.SERVICE_TAKEN, _serviceName, exe)
 end
 
+-- Running (or still starting) now and for the next SERVICE_SETTLE_SECONDS.
+local SERVICE_SETTLE_SECONDS = 5
+function ServiceStaysRunning(name)
+    for _ = 1, SERVICE_SETTLE_SECONDS do
+        if not ServiceRunning(name) then return false end
+        installx.Sleep(1000)
+    end
+    return ServiceRunning(name)
+end
+
 local function HostCommand(args, waitSec)
     installx.LogPrint(HOST_EXE .. " " .. args)
     installx.ProcessExecute("\"" .. Join(_dirHost, HOST_EXE) .. "\" " .. args, true, waitSec or 60)
+end
+
+-- The install path holds a LocalSystem service, so only SYSTEM and Administrators may change
+-- anything in it: below C:\ every user may create folders and files, and a module or keelhost.d
+-- fragment someone added would run as SYSTEM. installx.FilePathSecure creates the path as needed,
+-- refuses a junction on the way or inside and a directory another user owns, and gives the tree
+-- Administrators as owner and a protected DACL (Users read & execute). Data\, where the instances
+-- keep their configs and tokens, does not give Users even that; it is secured once the database
+-- is or was installed, after the install path, whose reset would otherwise reach it.
+-- Returns true, or false, the offending path and the Win32 error.
+function SecureInstallPath()
+    installx.LogPrint("Secure " .. _dirInstall .. " ...")
+    local secured, problem, code = installx.FilePathSecure(_dirInstall, true)
+    if not secured then
+        return false, problem, code
+    end
+    local data = Join(_dirInstall, "Data")
+    if ComponentSelected("KeelBase.Server") or installx.FilePathExists(data) then
+        return installx.FilePathSecure(data, false)
+    end
+    return true
 end
 
 -- Stops KeelBase's KeelHost service before its files are replaced. The service is not removed: an
@@ -860,13 +893,10 @@ function StartSetup()
         return fail(spaceError)
     end
 
-	installx.LogPrint("Check Exists " .. _dirInstall .. " ...")
-	if not installx.FilePathExists(_dirInstall) then
-		installx.LogPrint("Makedir " .. _dirInstall .. " ...")
-		if (not installx.FilePathMkdir(_dirInstall)) then
-			return fail(_strResource.MKDIR_FAILED .. _dirInstall)
-		end
-	end
+    local secured, problem, code = SecureInstallPath()
+    if not secured then
+        return fail(string.format(_strResource.UNSAFE_PATH, tostring(problem), tostring(code)))
+    end
 
     StopSelectedComponents()
 
@@ -1202,6 +1232,17 @@ function PostSetup()
             HostCommand("service install " .. _serviceName, 60)
         end
         HostCommand("service start " .. _serviceName, 120)
+        -- ProcessExecute does not report the command's exit code: what counts is the service's
+        -- state. KeelHost reports running before it opens its ports (libzce sets SERVICE_RUNNING
+        -- before onDaemonStart()), so a port in use or a config it rejects stops it a moment after
+        -- "service start" returned. Not running after a few seconds means KeelHost did not come
+        -- up, which the installer reports, and a silent install exits with an error, rather than
+        -- claim a working install.
+        if not ServiceStaysRunning(_serviceName) then
+            ErrorHint(string.format(_strResource.SERVICE_NOT_STARTED, _serviceName,
+                                    tostring(installx.ServiceState(_serviceName)), Join(_dirHost, "log")))
+            return false
+        end
     end
 
     -- The finish page only offers what was installed.

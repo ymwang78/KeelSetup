@@ -24,6 +24,9 @@ local UNINSTALL_KEY = "software\\microsoft\\windows\\currentversion\\uninstall\\
 local ENV_KEY = "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment"
 
 local files, registry, args, commands, ui, unzipped, failed, errors, serviceStates, subvms, freeBytes, missing
+local unsafePaths    -- lowercased paths installx.FilePathSecure refuses
+local startedState   -- the state a service is in after "service start": a string, or one per second
+local sleptMs, startedAtMs = 0, 0
 
 local function lower(path) return path:lower() end
 
@@ -93,7 +96,14 @@ installx = {
     SysGetArg = function(name) return args[name] end,
     SysPathAdd = function(path) table.insert(commands, "path " .. path) return true end,
     SetupFailed = function(reason) failed = reason return true end,
-    ServiceState = function(name) return serviceStates[name] end,
+    ServiceState = function(name)
+        local state = serviceStates[name]
+        if type(state) == "table" then
+            return state[math.min(#state, (sleptMs - startedAtMs) // 1000 + 1)]
+        end
+        return state
+    end,
+    Sleep = function(ms) sleptMs = sleptMs + ms end,
     RunAsAdmin = function() return true end,
     DiskFreeSpace = function() return freeBytes end,
     DuiVisible = function(name, visible)
@@ -120,9 +130,20 @@ installx = {
     DuiWindowPos = function() return true end,
     DuiProgress = function(name, percent) ui.percent = percent return true end,
     DuiMessage = function() return true end,
-    ProcessExecute = function(command) table.insert(commands, "exec " .. command) return 0 end,
+    ProcessExecute = function(command)
+        table.insert(commands, "exec " .. command)
+        local verb, name = command:match("\" service (%a+) ([%w%._%-]+)$")
+        if verb == "start" then serviceStates[name], startedAtMs = startedState, sleptMs end
+        if verb == "stop" then serviceStates[name] = "stopped" end
+        return 0
+    end,
     ProcessKill = function(name) table.insert(commands, "kill " .. name) return true end,
-    FilePathMkdir = function() return true end,
+    FilePathMkdir = function() error("the install path is created by FilePathSecure") end,
+    FilePathSecure = function(path, usersCanRead)
+        table.insert(commands, "secure " .. path .. " users=" .. tostring(usersCanRead))
+        if unsafePaths[lower(path)] then return false, path .. "\\junction", 4395 end
+        return true
+    end,
     FilePathChoose = function() return nil end,
     FilePathUnzip = function(resourceIDs, directory)
         assert(directory == INSTALL, directory)
@@ -166,6 +187,8 @@ local function reset(options)
     options = options or {}
     files, registry, args, commands = {}, {}, options.args or {}, {}
     unzipped, failed, errors, serviceStates, subvms, missing = nil, nil, {}, {}, {}, {}
+    unsafePaths, startedState = {}, options.startedState or "running"
+    for _, path in ipairs(options.unsafe or {}) do unsafePaths[lower(path)] = true end
     ui = {visible = {}, text = {}, selected = {}, enabled = {}, tab = 0}
     freeBytes = 100 * 1024 * MB
     for _, key in ipairs(options.installed or {}) do addFile(INSTALL .. "\\" .. MARKERS[key]) end
@@ -320,7 +343,8 @@ install({installed = {"Common.Runtime", "KeelBase.Server"}, recorded = {"Common.
 addFile(HOST .. "\\keelhost.xml")
 addFile(HOST .. "\\keelhost.d\\020-kbase.xml")
 check(runSetup() == true, "upgrade completes")
-check(commandAt("service stop KeelBase") == 1, "stopped first: " .. tostring(commands[1]))
+check(commandAt("service stop KeelBase") and commandAt("secure ") < commandAt("service stop KeelBase"),
+      "stopped after securing, before extraction: " .. tostring(commands[1]))
 check(commandAt("service install") == nil and commandAt("service start KeelBase"), "started again, not recreated")
 check(commandAt("copy") == nil, "site config and fragment kept")
 -- A stopped service is not stopped again, and starts with the upgraded files.
@@ -341,6 +365,44 @@ check(commandAt("path " .. INSTALL .. "\\Tools"), "Tools added to PATH when aske
 install({args = {components = "KeelBase.Server"}})
 runSetup()
 check(ui.visible["pathbtn"] == false, "no PATH option without the tools")
+
+----------------------------------------------------------------------------------------------------
+-- The install path holds a LocalSystem service: only SYSTEM and Administrators may change it
+
+-- Secured before anything else happens, Data\ without even read access for Users.
+install({services = {KeelBase = {"running", HOST .. "\\KeelHost.exe"}}, installed = {"KeelBase.Server"},
+         recorded = {"Common.Runtime", "KeelBase.Server"}})
+runSetup()
+check(commands[1] == "secure " .. INSTALL .. " users=true", "install path secured first: " .. tostring(commands[1]))
+check(commands[2] == "secure " .. INSTALL .. "\\Data users=false", "then Data\\ without Users: " .. tostring(commands[2]))
+-- Tools alone: no Data\ to create ...
+install({args = {components = "KeelBase.Tools"}})
+runSetup()
+check(commandAt("secure " .. INSTALL .. " users=true") and commandAt("\\Data") == nil, "no Data\\ for the tools")
+-- ... but an existing one is secured again (the install path's reset reaches it).
+install({args = {components = "KeelBase.Tools"}})
+addFile(INSTALL .. "\\Data\\kbase01\\kbase_server.json")
+runSetup()
+check(commandAt("secure " .. INSTALL .. "\\Data users=false"), "existing Data\\ secured again")
+-- A path FilePathSecure refuses (a junction, another user's directory) stops everything.
+install({args = {s = true}, unsafe = {INSTALL}, services = {KeelBase = {"running", HOST .. "\\KeelHost.exe"}}})
+check(runSetup() == false and unzipped == nil, "unsafe install path refused")
+check(failed:find(INSTALL .. "\\junction", 1, true) ~= nil and failed:find("4395", 1, true) ~= nil, "message names it: " .. failed)
+check(commandAt("service stop") == nil, "service not stopped for a refused path")
+
+-- A service that does not come up fails the installation instead of reporting success.
+install({startedState = "stopped"})
+check(runSetup() == false, "service not running fails PostSetup")
+check(errors[#errors]:find("KeelBase", 1, true) ~= nil and errors[#errors]:find(HOST .. "\\log", 1, true) ~= nil,
+      "message names the service and its logs: " .. tostring(errors[#errors]))
+install({startedState = "start_pending"})
+check(runSetup() == true, "a service still starting is not a failure")
+-- KeelHost reports running before it opens its ports: a port in use stops it a moment later.
+install({startedState = {"running", "running", "stopped"}})
+check(runSetup() == false and errors[#errors]:find("stopped", 1, true) ~= nil, "service that stops after starting fails")
+install({startedState = {"running", "running", "running", "running", "running", "running", "running"}})
+local before = sleptMs
+check(runSetup() == true and sleptMs - before >= 5000, "a service that stays up is watched for 5 s")
 
 ----------------------------------------------------------------------------------------------------
 -- KeelHost config and the instance fragment
