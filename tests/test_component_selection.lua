@@ -90,6 +90,9 @@ installx = {
     ProcessExecute = function(command) table.insert(commands, "exec " .. command) return true end,
     ProcessKill = function(name) table.insert(commands, "kill " .. name) return true end,
     FilePathMkdir = function() return true end,
+    -- Which directories get secured is tests/test_taijimpc6_security.lua's business.
+    FilePathSecure = function(path) table.insert(commands, "secure " .. path) return true end,
+    HostVMInfoAttribute = function() return false end,
     FilePathChoose = function() return chosenPath end,
     FilePathUnzip = function(resourceIDs, directory)
         assert(directory == ROOT, directory)

@@ -19,7 +19,40 @@ protected:
         file.close();
         return readHostVMSubvmNames(path.wstring(), root, names);
     }
+    bool info(const char* xml, const wchar_t* name, std::wstring& value, bool& found) {
+        std::ofstream file(path, std::ios::binary);
+        file << xml;
+        file.close();
+        return readHostVMInfoAttribute(path.wstring(), name, value, found);
+    }
 };
+TEST_F(HostVMConfigTest, InfoAttributeIsReadFromTheActiveElement) {
+    std::wstring value;
+    bool found = false;
+    // UTF-8 with BOM, as the configs are saved; a commented-out hostvm_info does not count.
+    ASSERT_TRUE(info("\xEF\xBB\xBF<hostvm_server><!-- <hostvm_info projects_dir='old'/> -->"
+                     "<hostvm_info threadnum='2' projects_dir='../\xE5\xB7\xA5\xE7\xA8\x8B&amp;x'/>"
+                     "<subvm_info vmname='a' projects_dir='no'/></hostvm_server>",
+                     L"projects_dir", value, found));
+    EXPECT_TRUE(found);
+    EXPECT_EQ(value, L"../工程&x");
+}
+TEST_F(HostVMConfigTest, InfoAttributeMissingIsFoundFalse) {
+    std::wstring value = L"stale";
+    bool found = true;
+    ASSERT_TRUE(info("<hostvm_server><hostvm_info threadnum='2'/></hostvm_server>", L"projects_dir", value, found));
+    EXPECT_FALSE(found);
+    EXPECT_TRUE(value.empty());
+    ASSERT_TRUE(info("<hostvm_server><log projects_dir='x'/></hostvm_server>", L"projects_dir", value, found));
+    EXPECT_FALSE(found);
+}
+TEST_F(HostVMConfigTest, InfoAttributeRejectsFragmentsMalformedAndMissingFiles) {
+    std::wstring value;
+    bool found = false;
+    EXPECT_FALSE(info("<hostvm_fragment><hostvm_info projects_dir='x'/></hostvm_fragment>", L"projects_dir", value, found));
+    EXPECT_FALSE(info("<hostvm_server><hostvm_info projects_dir='x'/>", L"projects_dir", value, found));
+    EXPECT_FALSE(readHostVMInfoAttribute(path.wstring() + L".missing", L"projects_dir", value, found));
+}
 TEST_F(HostVMConfigTest, ReadsActiveNamesAndIgnoresComments) {
     std::vector<std::wstring> names;
     ASSERT_TRUE(parse("<hostvm_server><!-- <subvm_info vmname='ident'/> -->"
