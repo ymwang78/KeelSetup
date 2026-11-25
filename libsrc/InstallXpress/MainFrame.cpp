@@ -130,7 +130,6 @@ LRESULT CMainFrame::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam)
 				RECT rc = m_pProgress->GetPos();
 				if (rc.left - MOVESIZE < LEFTOFFSET)
 				{
-					m_pProgress->SetValue(15);
 					::KillTimer(this->GetHWND(), WMPROGRESS_TIMER);
 					return 0;
 				}
@@ -448,7 +447,7 @@ void CMainFrame::InstallZip(UINT nResourceID, const std::wstring& strUnzipDir, i
 
 void CMainFrame::InstallSetup()
 {	
-	if (m_pProgress) {
+	if (m_pProgress && m_pProgress->IsVisible()) {
 		SetTimer(this->GetHWND(), WMPROGRESS_TIMER, PORGRESSSHOWSEPLEN, 0);
 	}
 }
