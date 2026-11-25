@@ -559,10 +559,16 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
     if( lDestWidth <= 0 || lDestHeight <= 0 ) return;
 
     RECT rcDestCorners = rcCorners;
-    if( rcDestCorners.left > lDestWidth ) rcDestCorners.left = lDestWidth;
-    if( rcDestCorners.right > lDestWidth - rcDestCorners.left ) rcDestCorners.right = lDestWidth - rcDestCorners.left;
-    if( rcDestCorners.top > lDestHeight ) rcDestCorners.top = lDestHeight;
-    if( rcDestCorners.bottom > lDestHeight - rcDestCorners.top ) rcDestCorners.bottom = lDestHeight - rcDestCorners.top;
+    if( rcDestCorners.left + rcDestCorners.right > lDestWidth ) {
+        LONG lTotalWidth = rcDestCorners.left + rcDestCorners.right;
+        rcDestCorners.left = lDestWidth * rcDestCorners.left / lTotalWidth;
+        rcDestCorners.right = lDestWidth - rcDestCorners.left;
+    }
+    if( rcDestCorners.top + rcDestCorners.bottom > lDestHeight ) {
+        LONG lTotalHeight = rcDestCorners.top + rcDestCorners.bottom;
+        rcDestCorners.top = lDestHeight * rcDestCorners.top / lTotalHeight;
+        rcDestCorners.bottom = lDestHeight - rcDestCorners.top;
+    }
 
     HDC hCloneDC = ::CreateCompatibleDC(hDC);
     HBITMAP hOldBitmap = (HBITMAP) ::SelectObject(hCloneDC, hBitmap);
@@ -694,7 +700,7 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
                 rcDest.right -= rcDest.left;
                 rcDest.bottom -= rcDest.top;
                 lpAlphaBlend(hDC, rcDest.left, rcDest.top, rcDest.right, rcDest.bottom, hCloneDC, \
-                    rcBmpPart.right - rcCorners.right, rcBmpPart.top, rcCorners.right, rcDestCorners.top, bf);
+                    rcBmpPart.right - rcDestCorners.right, rcBmpPart.top, rcDestCorners.right, rcDestCorners.top, bf);
             }
         }
         // left
@@ -725,7 +731,7 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
                 rcDest.right -= rcDest.left;
                 rcDest.bottom -= rcDest.top;
                 lpAlphaBlend(hDC, rcDest.left, rcDest.top, rcDest.right, rcDest.bottom, hCloneDC, \
-                    rcBmpPart.right - rcCorners.right, rcBmpPart.top + rcCorners.top, rcCorners.right, \
+                    rcBmpPart.right - rcDestCorners.right, rcBmpPart.top + rcCorners.top, rcDestCorners.right, \
                     rcBmpPart.bottom - rcBmpPart.top - rcCorners.top - rcCorners.bottom, bf);
             }
         }
@@ -741,7 +747,7 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
                 rcDest.right -= rcDest.left;
                 rcDest.bottom -= rcDest.top;
                 lpAlphaBlend(hDC, rcDest.left, rcDest.top, rcDest.right, rcDest.bottom, hCloneDC, \
-                    rcBmpPart.left, rcBmpPart.bottom - rcCorners.bottom, rcDestCorners.left, rcCorners.bottom, bf);
+                    rcBmpPart.left, rcBmpPart.bottom - rcDestCorners.bottom, rcDestCorners.left, rcDestCorners.bottom, bf);
             }
         }
         // bottom
@@ -756,8 +762,8 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
                 rcDest.right -= rcDest.left;
                 rcDest.bottom -= rcDest.top;
                 lpAlphaBlend(hDC, rcDest.left, rcDest.top, rcDest.right, rcDest.bottom, hCloneDC, \
-                    rcBmpPart.left + rcCorners.left, rcBmpPart.bottom - rcCorners.bottom, \
-                    rcBmpPart.right - rcBmpPart.left - rcCorners.left - rcCorners.right, rcCorners.bottom, bf);
+                    rcBmpPart.left + rcCorners.left, rcBmpPart.bottom - rcDestCorners.bottom, \
+                    rcBmpPart.right - rcBmpPart.left - rcCorners.left - rcCorners.right, rcDestCorners.bottom, bf);
             }
         }
         // right-bottom
@@ -772,8 +778,8 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
                 rcDest.right -= rcDest.left;
                 rcDest.bottom -= rcDest.top;
                 lpAlphaBlend(hDC, rcDest.left, rcDest.top, rcDest.right, rcDest.bottom, hCloneDC, \
-                    rcBmpPart.right - rcCorners.right, rcBmpPart.bottom - rcCorners.bottom, rcCorners.right, \
-                    rcCorners.bottom, bf);
+                    rcBmpPart.right - rcDestCorners.right, rcBmpPart.bottom - rcDestCorners.bottom, rcDestCorners.right, \
+                    rcDestCorners.bottom, bf);
             }
         }
     }
@@ -912,7 +918,7 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
                     rcDest.right -= rcDest.left;
                     rcDest.bottom -= rcDest.top;
                     ::StretchBlt(hDC, rcDest.left, rcDest.top, rcDest.right, rcDest.bottom, hCloneDC, \
-                        rcBmpPart.right - rcCorners.right, rcBmpPart.top, rcCorners.right, rcDestCorners.top, SRCCOPY);
+                        rcBmpPart.right - rcDestCorners.right, rcBmpPart.top, rcDestCorners.right, rcDestCorners.top, SRCCOPY);
                 }
             }
             // left
@@ -943,7 +949,7 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
                     rcDest.right -= rcDest.left;
                     rcDest.bottom -= rcDest.top;
                     ::StretchBlt(hDC, rcDest.left, rcDest.top, rcDest.right, rcDest.bottom, hCloneDC, \
-                        rcBmpPart.right - rcCorners.right, rcBmpPart.top + rcCorners.top, rcCorners.right, \
+                        rcBmpPart.right - rcDestCorners.right, rcBmpPart.top + rcCorners.top, rcDestCorners.right, \
                         rcBmpPart.bottom - rcBmpPart.top - rcCorners.top - rcCorners.bottom, SRCCOPY);
                 }
             }
@@ -959,7 +965,7 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
                     rcDest.right -= rcDest.left;
                     rcDest.bottom -= rcDest.top;
                     ::StretchBlt(hDC, rcDest.left, rcDest.top, rcDest.right, rcDest.bottom, hCloneDC, \
-                        rcBmpPart.left, rcBmpPart.bottom - rcCorners.bottom, rcDestCorners.left, rcCorners.bottom, SRCCOPY);
+                        rcBmpPart.left, rcBmpPart.bottom - rcDestCorners.bottom, rcDestCorners.left, rcDestCorners.bottom, SRCCOPY);
                 }
             }
             // bottom
@@ -974,8 +980,8 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
                     rcDest.right -= rcDest.left;
                     rcDest.bottom -= rcDest.top;
                     ::StretchBlt(hDC, rcDest.left, rcDest.top, rcDest.right, rcDest.bottom, hCloneDC, \
-                        rcBmpPart.left + rcCorners.left, rcBmpPart.bottom - rcCorners.bottom, \
-                        rcBmpPart.right - rcBmpPart.left - rcCorners.left - rcCorners.right, rcCorners.bottom, SRCCOPY);
+                        rcBmpPart.left + rcCorners.left, rcBmpPart.bottom - rcDestCorners.bottom, \
+                        rcBmpPart.right - rcBmpPart.left - rcCorners.left - rcCorners.right, rcDestCorners.bottom, SRCCOPY);
                 }
             }
             // right-bottom
@@ -990,8 +996,8 @@ void CRenderEngine::DrawImage(HDC hDC, HBITMAP hBitmap, const RECT& rc, const RE
                     rcDest.right -= rcDest.left;
                     rcDest.bottom -= rcDest.top;
                     ::StretchBlt(hDC, rcDest.left, rcDest.top, rcDest.right, rcDest.bottom, hCloneDC, \
-                        rcBmpPart.right - rcCorners.right, rcBmpPart.bottom - rcCorners.bottom, rcCorners.right, \
-                        rcCorners.bottom, SRCCOPY);
+                        rcBmpPart.right - rcDestCorners.right, rcBmpPart.bottom - rcDestCorners.bottom, rcDestCorners.right, \
+                        rcDestCorners.bottom, SRCCOPY);
                 }
             }
         }
