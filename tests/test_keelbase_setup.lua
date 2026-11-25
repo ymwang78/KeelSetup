@@ -34,6 +34,7 @@ local ENV_KEY = "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environmen
 
 local files, registry, args, commands, ui, unzipped, failed, errors, serviceStates, subvms, freeBytes, missing
 local unsafePaths    -- lowercased paths installx.FilePathSecure refuses
+local stopErrors     -- executable path -> Win32 error
 local hostSeedAttributes
 local startedState   -- the state a service is in after "service start": a string, or one per second
 local sleptMs, startedAtMs = 0, 0
@@ -147,7 +148,11 @@ installx = {
         if verb == "stop" then serviceStates[name] = "stopped" end
         return 0
     end,
-    ProcessKill = function(name) table.insert(commands, "kill " .. name) return true end,
+    ProcessStopAtPath = function(path)
+        table.insert(commands, "stop " .. path)
+        local code = stopErrors[path]
+        return code == nil, code or 0
+    end,
     FilePathMkdir = function() error("the install path is created by FilePathSecure") end,
     FilePathSecure = function(path, usersCanRead, private)
         table.insert(commands, "secure " .. path .. " users=" .. tostring(usersCanRead)
@@ -158,6 +163,7 @@ installx = {
     FilePathChoose = function() return nil end,
     FilePathUnzip = function(resourceIDs, directory)
         assert(directory == INSTALL, directory)
+        table.insert(commands, "unzip " .. directory)
         unzipped = resourceIDs
         return true
     end,
@@ -211,6 +217,7 @@ local function reset(options)
     hostSeedAttributes = options.hostSeedAttributes or {projects_dir = "../Data", vmport = "7820"}
     unzipped, failed, errors, serviceStates, subvms, missing = nil, nil, {}, {}, {}, {}
     unsafePaths, startedState = {}, options.startedState or "running"
+    stopErrors = options.stopErrors or {}
     for _, path in ipairs(options.unsafe or {}) do unsafePaths[lower(path)] = true end
     ui = {visible = {}, text = {}, selected = {}, enabled = {}, tab = 0}
     freeBytes = 100 * 1024 * MB
@@ -435,6 +442,30 @@ check(commandAt("service stop KeelBase") and commandAt("secure ") < commandAt("s
       "stopped after securing, before extraction: " .. tostring(commands[1]))
 check(commandAt("service install") == nil and commandAt("service start KeelBase"), "started again, not recreated")
 check(commandAt("copy") == nil, "site config and fragment kept")
+-- The selected, installed client and tools must be stopped before the service and extraction.
+local deckStop = "stop " .. INSTALL .. "\\Deck\\KeelDeck.exe"
+local toolsStop = "stop " .. INSTALL .. "\\Tools\\kbased.exe"
+local running = {KeelBase = {"running", HOST .. "\\KeelHost.exe"}}
+local installedPrograms = {"KeelBase.Server", "KeelBase.KeelDeck", "KeelBase.Tools"}
+install({installed = installedPrograms, recorded = installedPrograms, services = running})
+StartSetup()
+local serviceStop, unzipAt = commandAt("service stop KeelBase"), commandAt("unzip ")
+check(serviceStop and unzipAt and commandAt(deckStop) and commandAt(toolsStop)
+      and commandAt(deckStop) < serviceStop and commandAt(toolsStop) < serviceStop and serviceStop < unzipAt,
+      "stop only this installation's selected programs before stopping the service and extracting")
+
+install({args = {s = true}, installed = installedPrograms, recorded = installedPrograms, services = running,
+         stopErrors = {[INSTALL .. "\\Deck\\KeelDeck.exe"] = 1460}})
+StartSetup()
+check(failed and failed:find("KeelDeck.exe", 1, true) and failed:find("1460", 1, true),
+      "silent upgrade fails with the executable and Windows error")
+check(unzipped == nil and commandAt("service stop") == nil, "failed stop leaves the service running before extraction")
+
+install({args = {components = "KeelBase.Server"}, installed = installedPrograms, services = running})
+StartSetup()
+check(unzipped and commandAt(deckStop) == nil and commandAt(toolsStop) == nil,
+      "unselected programs are left running")
+
 -- A stopped service is not stopped again, and starts with the upgraded files.
 install({installed = {"Common.Runtime", "KeelBase.Server"}, recorded = {"Common.Runtime", "KeelBase.Server"},
          services = {KeelBase = {"stopped", HOST .. "\\KeelHost.exe"}}})

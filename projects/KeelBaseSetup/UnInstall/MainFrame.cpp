@@ -5,11 +5,20 @@
 #include <process.h>
 #include <shellapi.h>
 #include <Shlwapi.h>
-#include <TlHelp32.h>
+#include <atomic>
+#include <InstallXpress/ProcessPath.h>
+#include <Utility/log.h>
 #include "Utility/Utility.h"
 #include <Utility/DirUtility.h>
 #include <InstallXpress/LuaExtention.h>
 #include <Utility/ResourceHandler.h>
+
+static std::atomic<int> uninstallExitCode{0};
+
+int CUninstallMainFrame::GetExitCode()
+{
+	return uninstallExitCode.load();
+}
 
 #define  WMPROGRESS_TIMER WM_USER+1000
 #define  WMPROGRESSFINISH_TIMER WM_USER+1001
@@ -269,6 +278,28 @@ void CUninstallMainFrame::UnInstall()
 		return;
 	}
 
+	// Use the same directory as Lua, which deletes Deck and Tools in PreSetup().
+	std::wstring cleanupDir = m_luaPtr ? Utf82Unicode(m_luaPtr->QueryByKey_String("InstallPath")) : L"";
+	if (cleanupDir.empty())
+		cleanupDir = installDir;
+	for (const wchar_t* executable : { L"\\Deck\\KeelDeck.exe", L"\\Tools\\kbased.exe" })
+	{
+		std::wstring path = cleanupDir + executable;
+		DWORD error = stopProcessAtPath(path);
+		if (error != ERROR_SUCCESS)
+		{
+			APPLOG(Log::LOG_ERROR)("Cannot stop %s (error %lu)\n", UnicodeToUtf8(path).c_str(), error);
+			if (!m_bSilent)
+			{
+				hintString.Format(L"无法关闭 %s（错误 %lu）。请退出该程序后重新运行卸载。", path.c_str(), error);
+				MessageBox(GetHWND(), hintString, L"KeelBase", MB_OK | MB_ICONERROR);
+			}
+			uninstallExitCode = 1;
+			PostMessage(WM_CLOSE, 0, 0);
+			return;
+		}
+	}
+
     // Product-specific cleanup (services, COM, registry, shortcuts, sibling
     // directories) is implemented in UnInstall.lua PreSetup().
     if (m_luaPtr)
@@ -277,7 +308,6 @@ void CUninstallMainFrame::UnInstall()
 	int nUnInstall = 0;  //要删除文件个数;
 	int ndelindex = 0;	 //已删除文件个数;
 
-	KillProcess();
 	//计算卸载数量(文件夹为单位);
 	GetUnInstallSize(wstrdir, nUnInstall);
 	//删除文件();
@@ -387,73 +417,4 @@ void CUninstallMainFrame::DeleteAllFile(std::wstring &strFile, int &nCurUnInstal
 	if (nprogressvalue >= 100) nprogressvalue = 98;
 	::PostMessage(this->GetHWND(), WM_INSTALLPROGRES_MSG, 0, nprogressvalue);
 	Sleep(60);
-}
-
-// Whether a file is inside the install path (the parent of m_strUnInstallDir), case-insensitively:
-// kbased.exe runs from its Tools\ directory.
-bool CUninstallMainFrame::IsInInstallDir(const std::wstring& path) const
-{
-	std::wstring dir = CTypeConvertUtil::StringToWstring(ParentDir(m_strUnInstallDir));
-	if (dir.empty() || path.size() <= dir.size() + 1)
-		return false;
-	return _wcsnicmp(path.c_str(), dir.c_str(), dir.size()) == 0 && path[dir.size()] == L'\\';
-}
-
-void CUninstallMainFrame::KillProcess()
-{
-	ProcessPrivilege(true);
-	//创建进程快照;
-	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-	if (hSnapshot != INVALID_HANDLE_VALUE)
-	{
-		PROCESSENTRY32 pe32 = { 0 };
-		pe32.dwSize = sizeof(pe32);
-
-		//拿到第一个进程信息;
-		if (!Process32First(hSnapshot, &pe32))
-		{
-			CloseHandle(hSnapshot);
-			return;
-		}
-		do
-		{
-			if (_wcsicmp(pe32.szExeFile, APPEXENAME) == 0 || _wcsicmp(pe32.szExeFile, L"KeelDeck.exe") == 0)
-			{
-				HANDLE hProcess = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe32.th32ProcessID);
-				if (hProcess)
-				{
-					// Close only copies of kbased.exe and KeelDeck.exe under this install directory.
-					wchar_t image[MAX_PATH * 2] = { 0 };
-					DWORD size = _countof(image);
-					if (QueryFullProcessImageNameW(hProcess, 0, image, &size) && IsInInstallDir(image))
-						TerminateProcess(hProcess, 0);//关闭进程;
-					CloseHandle(hProcess);
-				}
-			}
-
-		} while (Process32Next(hSnapshot, &pe32));
-	}
-	CloseHandle(hSnapshot);
-}
-
-BOOL CUninstallMainFrame::ProcessPrivilege(BOOL bEnable)
-{
-	BOOL                   bResult = TRUE;
-	HANDLE               hToken = INVALID_HANDLE_VALUE;
-	TOKEN_PRIVILEGES     TokenPrivileges;
-	if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES, &hToken) == 0)
-	{
-		bResult = FALSE;
-	}
-	TokenPrivileges.PrivilegeCount = 1;
-	TokenPrivileges.Privileges[0].Attributes = bEnable ? SE_PRIVILEGE_ENABLED : 0;
-	LookupPrivilegeValue(NULL, SE_DEBUG_NAME, &TokenPrivileges.Privileges[0].Luid);
-	AdjustTokenPrivileges(hToken, FALSE, &TokenPrivileges, sizeof(TOKEN_PRIVILEGES), NULL, NULL);
-	if (GetLastError() != ERROR_SUCCESS)
-	{
-		bResult = FALSE;
-	}
-	CloseHandle(hToken);
-
-	return bResult;
 }

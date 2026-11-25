@@ -49,5 +49,5 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	::OleUninitialize();
 	::CoUninitialize();
 
-    return (int)0;
+    return CUninstallMainFrame::GetExitCode();
 }

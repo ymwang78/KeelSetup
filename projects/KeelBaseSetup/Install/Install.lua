@@ -71,6 +71,7 @@ local _strResourceCN = {
 	BAD_SERVICE_NAME = "服务名只能包含字母、数字、点、下划线和减号: ",
 	BAD_PATH = "安装路径必须是本机磁盘上的绝对路径: ",
 	UNSAFE_PATH = "无法安全地使用安装目录（%s，错误 %s）：路径上或目录里有链接点，或者目录、或目录里的文件是其他用户创建的。请检查并删除它，或换一个目录",
+	PROCESS_NOT_STOPPED = "无法关闭 %s（错误 %s）。请退出该程序后重试",
 	SERVICE_NOT_STARTED = "KeelBase 服务 %s 没有启动起来（状态 %s），请查看 %s 下的日志",
 	REQUIRED = "必装",
 	INSTALLED = "已安装",
@@ -102,6 +103,7 @@ local _strResourceEN = {
 	BAD_SERVICE_NAME = "A service name may only contain letters, digits, dots, underscores and dashes: ",
 	BAD_PATH = "The install path must be an absolute path on a local drive: ",
 	UNSAFE_PATH = "Cannot use the install path safely (%s, error %s): a junction or link is on the way or inside, or another user created the directory or a file in it. Check and delete it, or choose another path",
+	PROCESS_NOT_STOPPED = "Could not stop %s (error %s). Close the program and try again",
 	SERVICE_NOT_STARTED = "The KeelBase service %s did not start (state %s); see the logs in %s",
 	REQUIRED = "required",
 	INSTALLED = "installed",
@@ -845,13 +847,24 @@ function SecureInstallPath()
     return true
 end
 
--- Stops KeelBase's KeelHost service before its files are replaced. The service is not removed: an
--- upgrade keeps whatever the site changed in it (account, recovery). "service stop" waits until the
--- service has stopped, workers included. Nothing else on the machine is stopped.
+-- Stop programs whose files will be replaced before stopping the service. If a program remains
+-- open, leave the service running and report the problem before extraction can prompt for a retry.
 function StopSelectedComponents()
+    for _, key in ipairs({"KeelBase.KeelDeck", "KeelBase.Tools"}) do
+        if ComponentSelected(key) then
+            local path = Join(_dirInstall, _items[key].marker)
+            local stopped, code = installx.ProcessStopAtPath(path)
+            if not stopped then
+                return false, string.format(_strResource.PROCESS_NOT_STOPPED, path, code)
+            end
+        end
+    end
+
+    -- Stop the service and its workers, keeping the service configuration for the upgrade.
     if ComponentSelected("KeelBase.Server") and ServiceRunning(_serviceName) then
         HostCommand("service stop " .. _serviceName, 120)
     end
+    return true
 end
 
 function StartSetup()
@@ -899,7 +912,10 @@ function StartSetup()
         return fail(string.format(_strResource.UNSAFE_PATH, tostring(problem), tostring(code)))
     end
 
-    StopSelectedComponents()
+    local stopped, stopError = StopSelectedComponents()
+    if not stopped then
+        return fail(stopError)
+    end
 
     if installx.DuiTabSelect("installlayout") > 0 then
         ShowMainPage()

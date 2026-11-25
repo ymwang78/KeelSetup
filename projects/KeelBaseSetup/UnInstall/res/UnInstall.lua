@@ -4,12 +4,12 @@
 -- The native host (CUninstallMainFrame) drives the UI, then calls:
 --   OnInitialize()  -- when the window is ready
 --   PreSetup()      -- after the user confirms (at once for /s), on the worker thread
--- and afterwards ends the kbased.exe of the install path, recursively deletes the directory the
--- running UnInstall.exe lives in (<InstallPath>\Uninstall), self-deletes it, and removes the
--- install path if nothing is left in it.
+-- The native host stops the installed KeelDeck and kbased before PreSetup(), then removes
+-- the directory of the running UnInstall.exe (<InstallPath>\Uninstall) after Lua cleanup.
+-- It removes the install path if nothing is left in it.
 --
 -- PreSetup() undoes the rest of projects/KeelBaseSetup/Install/Install.lua: KeelBase's own KeelHost
--- service, Host\, Tools\ and Redist\, the registry entries and the PATH entry. The instances' data in
+-- service, Host\, Deck\, Tools\ and Redist\, the registry entries and the PATH entry. The instances' data in
 -- Data\ (KeelHost's projects_dir) is never deleted, nor are the OPC Core Components and the VC++
 -- runtime, which other software may use. Nothing outside the install path is touched: a service of
 -- the recorded name that runs another installation's KeelHost stays as it is.
