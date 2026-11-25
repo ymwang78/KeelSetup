@@ -166,6 +166,9 @@ IDR_PKG_COMMON_RUNTIME      INSTALLSOFT         "res\\Common.7z"
 IDR_PKG_COMMON_OPCCORE      INSTALLSOFT         "res\\OpcCore.7z"
 IDR_PKG_KEELBASE_SERVER     INSTALLSOFT         "res\\KeelBaseServer.7z"
 IDR_PKG_KEELBASE_TOOLS      INSTALLSOFT         "res\\KeelBaseTools.7z"
+IDR_PKG_KEELSIM             INSTALLSOFT         "res\\KeelSim.7z"
+IDR_PKG_KEELTRACE           INSTALLSOFT         "res\\KeelTrace.7z"
+IDR_PKG_KEELDECK            INSTALLSOFT         "res\\KeelDeck.7z"
 
 
 /////////////////////////////////////////////////////////////////////////////

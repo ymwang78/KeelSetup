@@ -417,21 +417,12 @@ void CUninstallMainFrame::KillProcess()
 		}
 		do
 		{
-			CDuiString strKillProcess = APPEXENAME;
-
-			CDuiString strRunProcess = _T("");
-			strRunProcess.Format(_T("%s"), pe32.szExeFile);
-			if (strKillProcess.GetLength() != strRunProcess.GetLength())
-			{
-				continue;
-			}
-			if (_tcsicmp(strKillProcess.GetData(), strRunProcess.GetData()) == 0)
+			if (_wcsicmp(pe32.szExeFile, APPEXENAME) == 0 || _wcsicmp(pe32.szExeFile, L"KeelDeck.exe") == 0)
 			{
 				HANDLE hProcess = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe32.th32ProcessID);
 				if (hProcess)
 				{
-					// Only the copy this uninstaller is about to delete: a kbased.exe started from
-					// anywhere else is not this installation's business.
+					// Close only copies of kbased.exe and KeelDeck.exe under this install directory.
 					wchar_t image[MAX_PATH * 2] = { 0 };
 					DWORD size = _countof(image);
 					if (QueryFullProcessImageNameW(hProcess, 0, image, &size) && IsInInstallDir(image))

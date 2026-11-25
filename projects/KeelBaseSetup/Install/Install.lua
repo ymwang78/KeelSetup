@@ -5,7 +5,7 @@
 -- of its own, apart from the HostVM service other products (TaijiMPC6) install: its own copy of
 -- KeelHost and zce.dll, its own service (KeelBase) and ports (7820/7821), so that installing,
 -- upgrading or removing either never touches the other. Everything lives in the install path
--- (default C:\TaijiControl\KeelBase):
+-- (default C:\KeelCon\KeelBase):
 --   Host\                       KeelHost, its config keelhost.xml (seeded from keelhost.default.xml),
 --                               modules\KeelBase\ and keelhost.d\020-kbase.xml (instance kbase01)
 --   Data\                       KeelHost's projects_dir: the instances' homes and data (kept on uninstall)
@@ -23,16 +23,18 @@ local RES = {
     LICENSE  = 133,  -- IDR_REGCONTENT1
     BACKGROUND = 138, -- IDB_RES_BACKGROUND
 }
+local MAIN_BACKGROUND = "res='" .. RES.BACKGROUND .. "' restype='png' dest='0,0,600,220'"
 
 -- build_KeelBaseSetup.py writes the release version and the version of the bundled
 -- vc_redist.x64.exe here at build time and restores them afterwards.
 local _VERSION = "3.0.0.1"
 local VC_REDIST_VERSION = "14.52.37029.0"
 
-local DEFAULT_PATH = "C:\\TaijiControl\\KeelBase"
+local DEFAULT_PATH = "C:\\KeelCon\\KeelBase"
 local DEFAULT_SERVICE = "KeelBase"
-local SHARED_KEY = "Software\\TaijiControl"            -- InstallPath: the root other TaijiControl products use
-local PRODUCT_KEY = SHARED_KEY .. "\\KeelBase"          -- InstallPath, Version, ServiceName
+local PRODUCT_KEY = "Software\\TaijiControl\\KeelBase" -- InstallPath, Version, ServiceName
+local DECK_SHORTCUT = "KeelBase.lnk"
+local DECK_EXE = "Deck\\KeelDeck.exe"
 local COMPONENTS_KEY = PRODUCT_KEY .. "\\Components"    -- "Group.Item" = version that installed it
 local UNINST_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\KeelBase"
 
@@ -43,6 +45,7 @@ local HOST_CONFIGS = {"keelhost.xml", "hostvm.xml"}     -- main config: KeelHost
 local FRAGMENT_DIRS = {"keelhost.d", "hostvm.d"}
 local KBASE_FRAGMENT = "keelhost.d\\020-kbase.xml"
 local KBASE_FRAGMENT_TEMPLATE = KBASE_FRAGMENT .. ".template"
+local KBASE_PORTS_TEMPLATE = "kbase_server.json.template"
 
 local _dirInstall = DEFAULT_PATH
 local _dirHost = DEFAULT_PATH .. "\\Host"
@@ -155,13 +158,10 @@ local function NonEmpty(value)
     return value
 end
 
--- /path=, else where this setup installed KeelBase before, else KeelBase\ in the root other
--- TaijiControl products use, else the default.
+-- /path= takes precedence over the recorded KeelBase install path and the first-install default.
 function DefaultInstallPath()
-    local sharedRoot = NonEmpty(installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, SHARED_KEY, "InstallPath"))
     return NonEmpty(installx.SysGetArg("path"))
         or NonEmpty(installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, PRODUCT_KEY, "InstallPath"))
-        or (sharedRoot and Join(NormalizePath(sharedRoot), "KeelBase"))
         or DEFAULT_PATH
 end
 
@@ -184,8 +184,8 @@ end
 -- path, so the installed layout does not depend on what was selected. A group only gathers its
 -- items. The skin's controls are grp_<group> and item_<group>_<item>.
 --   required  always installed; its checkbox is disabled
---   deps      items it cannot run without. Selecting it also selects those that are not
---             installed yet; deselecting one of those also deselects it
+--   deps      items installed in the same run so the module and KeelHost DLLs match.
+--             Deselecting a dependency also deselects the items that need it.
 --   marker    path under the install path that exists once the item is installed
 -- An item whose archive this installer does not carry (installx.PackageInfo returns nil) is hidden.
 local COMPONENTS = {
@@ -201,12 +201,27 @@ local COMPONENTS = {
     { id = "KeelBase", name = {"KeelBase", "KeelBase"}, items = {
         { id = "Server", res = 160, marker = "Host\\modules\\KeelBase\\kh_keelbase.dll",
           name = {"KeelBase 时序数据库", "KeelBase database"},
-          desc = {"KeelBase 专用的 KeelHost 服务（Windows 服务 KeelBase，端口 7820/7821）、KeelBase 模块和默认实例 kbase01（REST 端口 8080，数据端口 9090）",
-                  "KeelBase's own KeelHost service (Windows service KeelBase, ports 7820/7821), the KeelBase module and the default instance kbase01 (REST port 8080, data port 9090)"} },
+          desc = {"KeelBase 专用的 KeelHost 服务（Windows 服务 KeelBase，端口 7820/7821）、KeelBase 模块和默认实例 kbase01（REST 端口 7828，数据端口 7829）",
+                  "KeelBase's own KeelHost service (Windows service KeelBase, ports 7820/7821), the KeelBase module and the default instance kbase01 (REST port 7828, data port 7829)"} },
         { id = "Tools", res = 161, marker = "Tools\\kbased.exe",
           name = {"命令行工具", "Command-line tools"},
-          -- kbasecli.exe goes along when the build has one (KeelBase has no Windows project for it yet).
+          -- kbasecli.exe goes along when the build has one.
           desc = {"独立运行的 kbased 等命令行工具", "Standalone kbased and other command-line tools"} },
+        { id = "KeelSim", res = 162, marker = "Host\\modules\\KeelSim\\kh_keelsim.dll",
+          deps = {"KeelBase.Server"},
+          name = {"KeelSim 仿真模块", "KeelSim simulation module"},
+          desc = {"KeelHost 仿真模块及 Python 运行时，需要 KeelBase 服务组件",
+                  "KeelHost simulation module and Python runtime. Requires the KeelBase server component."} },
+        { id = "KeelTrace", res = 163, marker = "Host\\modules\\KeelTrace\\kh_keeltrace.dll",
+          deps = {"KeelBase.Server"},
+          name = {"KeelTrace 采集模块", "KeelTrace acquisition module"},
+          desc = {"KeelHost 数据采集模块，需要 KeelBase 服务组件",
+                  "KeelHost data acquisition module. Requires the KeelBase server component."} },
+        { id = "KeelDeck", res = 164, marker = DECK_EXE,
+          default_on_upgrade = true,
+          name = {"KeelDeck 客户端", "KeelDeck client"},
+          desc = {"KeelBase、KeelSim 和 KeelTrace 的管理界面",
+                  "Management UI for KeelBase, KeelSim, and KeelTrace"} },
     }},
 }
 
@@ -270,7 +285,7 @@ local function RecordedComponents()
 end
 
 -- Reads which archives the installer carries and what is installed, and selects the defaults:
--- everything for a first install, what this setup installed last time for an upgrade.
+-- all available components on a first install, and the recorded selection plus KeelDeck on upgrades.
 function LoadComponents()
     _order, _items, _selected, _installed, _hint = {}, {}, {}, {}, nil
     for _, group in ipairs(COMPONENTS) do
@@ -290,9 +305,8 @@ function LoadComponents()
     RefreshInstalledComponents()
     local recorded, upgrade = RecordedComponents()
     for _, item in ipairs(_order) do
-        if item.info and LockedState(item) == nil and (not upgrade or recorded[item.key]) then
-            -- Through SelectComponent: an item whose dependency is neither installed nor in this
-            -- installer stays deselected.
+        if item.info and LockedState(item) == nil and (not upgrade or recorded[item.key] or item.default_on_upgrade) then
+            -- SelectComponent leaves items with unavailable dependencies unchecked.
             SelectComponent(item.key, true)
         end
     end
@@ -322,14 +336,14 @@ function SelectComponent(key, on, notes)
         if _selected[key] then return true end
         for _, dep in ipairs(item.deps or {}) do
             local depItem = _items[dep]
-            if not _installed[dep] and (depItem == nil or depItem.info == nil) then
+            if depItem == nil or depItem.info == nil then
                 if notes then table.insert(notes.missing, {key, dep}) end
                 return false
             end
         end
         _selected[key] = true
         for _, dep in ipairs(item.deps or {}) do
-            if not _selected[dep] and not _installed[dep] then
+            if not _selected[dep] then
                 SelectComponent(dep, true, notes)
                 if notes then table.insert(notes.added, {dep, key}) end
             end
@@ -337,12 +351,10 @@ function SelectComponent(key, on, notes)
     else
         if not _selected[key] then return true end
         _selected[key] = nil
-        if not _installed[key] then
-            for _, other in ipairs(_order) do
-                if _selected[other.key] and DependsOn(other, key) then
-                    SelectComponent(other.key, false, notes)
-                    if notes then table.insert(notes.removed, {other.key, key}) end
-                end
+        for _, other in ipairs(_order) do
+            if _selected[other.key] and DependsOn(other, key) then
+                SelectComponent(other.key, false, notes)
+                if notes then table.insert(notes.removed, {other.key, key}) end
             end
         end
     end
@@ -378,7 +390,7 @@ end
 
 -- /components=<names>: exactly the named groups and items (and what they need) besides the
 -- required ones. Returns the names it does not know, and the requested items it cannot install
--- (no archive in this installer, or a dependency that is neither installed nor in it).
+-- (no archive for it or for one of its dependencies).
 function ApplyComponentArg(text)
     _selected = {}
     for _, item in ipairs(_order) do
@@ -411,7 +423,7 @@ function ReconcileComponentDependencies(notes)
         for _, item in ipairs(_order) do
             if _selected[item.key] and LockedState(item) == nil then
                 for _, dep in ipairs(item.deps or {}) do
-                    if not _selected[dep] and not _installed[dep] then
+                    if not _selected[dep] then
                         changed = true
                         local depItem = _items[dep]
                         if depItem and depItem.info and SelectComponent(dep, true, notes) then
@@ -572,7 +584,7 @@ local function ShowMainPage()
     installx.DuiVisible("custombtn", true)
     installx.DuiText("titletext", _strResource.SETUP)
     installx.DuiTextColor("titletext", 0xFFFFFFFF)
-    installx.DuiSetBkImage("mainlayout", "res='" .. RES.BACKGROUND .. "' restype='png' source='0,0,600,221' corner='300,208,5,5'")
+    installx.DuiSetBkImage("mainlayout", MAIN_BACKGROUND)
 end
 
 local function ShowComponentPage()
@@ -584,7 +596,7 @@ local function ShowComponentPage()
     installx.DuiVisible("sureportlayout", false)
     installx.DuiText("titletext", _strResource.COMPONENTS)
     installx.DuiTextColor("titletext", 0xFF5DA5FF)
-    installx.DuiSetBkImage("mainlayout", "res='" .. RES.BACKGROUND .. "' restype='png' source='20,210,80,216'")
+    installx.DuiSetBkImage("mainlayout", "")
     RefreshComponentPage()
 end
 
@@ -680,7 +692,7 @@ function OnButtonClick(btnName)
         installx.DuiText("titletext", _strResource.LICENSE)
         installx.DuiTextColor("titletext", 0xFF5DA5FF)
         installx.DuiText("portcontent", RES.LICENSE)
-        installx.DuiSetBkImage("mainlayout", "res='" .. RES.BACKGROUND .. "' restype='png' source='20,210,80,216'")
+        installx.DuiSetBkImage("mainlayout", "")
     elseif (btnName == "starinstallbtn") then
         StartSetup()
     elseif (btnName == "starusebtn") then
@@ -715,7 +727,6 @@ function OnSelChanged(btnName, isSelected)
     RefreshComponentPage()
 end
 
-local _image_index = 0
 local _lastPercent = 0   -- prevents progress bar going backwards during parallel extraction
 local _unzipTotal = 0    -- unpacked bytes of the archives being extracted
 local _unzipDone = 0
@@ -736,17 +747,6 @@ function OnUnzipProgress(nNotifyID, nTotalFileNum, nCurFileIndex, nTotalSize, nC
 	if percent <= _lastPercent then return end
 	_lastPercent = percent
 
-	local bgRes = "res='" .. RES.BACKGROUND .. "' restype='png'"
-	if _image_index < 3 and percent > 80 then
-		_image_index = 3
-		installx.DuiSetBkImage("mainlayout", bgRes .. " source='0,666,600,886' corner='300,208,5,5'")
-	elseif _image_index < 2 and percent > 50 then
-		_image_index = 2
-		installx.DuiSetBkImage("mainlayout", bgRes .. " source='0,444,600,664' corner='300,208,5,5'")
-	elseif _image_index < 1 and percent > 15 then
-		_image_index = 1
-		installx.DuiSetBkImage("mainlayout", bgRes .. " source='0,222,600,442' corner='300,208,5,5'")
-	end
 	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
 end
 
@@ -932,6 +932,33 @@ end
 ----------------------------------------------------------------------------------------------------
 -- KeelHost configuration
 
+-- Seed the database endpoints only when creating the standard KeelHost configuration.
+local function InstallDefaultDatabasePorts(defaultConfig)
+    if installx.HostVMInfoAttribute(defaultConfig, "projects_dir") ~= "../Data" or
+       installx.HostVMInfoAttribute(defaultConfig, "vmport") ~= "7820" then
+        return true
+    end
+    local home = Join(_dirInstall, "Data\\kbase01")
+    local config = Join(home, "kbase_server.json")
+    if installx.FilePathExists(config) or installx.FilePathExists(Join(home, "config.json")) then
+        return true
+    end
+    if not installx.FilePathExists(home) and not installx.FilePathSecure(home, false) then
+        ErrorHint(_strResource.FRAGMENT_FAILED .. home)
+        return false
+    end
+    local ok, copyError = installx.FilePathCopy(Join(_dirHost, KBASE_PORTS_TEMPLATE), config, true)
+    if ok then
+        installx.LogPrint("Created KeelBase database port config: " .. config)
+        return true
+    end
+    if copyError ~= 80 and copyError ~= 183 and installx.FilePathExists(config) then
+        installx.FilePathDelete(config)
+    end
+    ErrorHint(_strResource.FRAGMENT_FAILED .. config)
+    return false
+end
+
 -- The package ships Host\keelhost.default.xml but never keelhost.xml: once a main config exists it
 -- belongs to the site (ports, threads, projects_dir), so an upgrade keeps it. KeelHost refuses to
 -- start when keelhost.xml and the older hostvm.xml both exist, so neither is created next to the
@@ -944,9 +971,13 @@ function InstallHostConfig()
             return true
         end
     end
+    local defaultConfig = Join(_dirHost, HOST_DEFAULT_CONFIG)
+    if not InstallDefaultDatabasePorts(defaultConfig) then
+        return false
+    end
     local siteConfig = Join(_dirHost, HOST_CONFIGS[1])
     -- true: fail if it exists, which also protects a config created after the check above.
-    if installx.FilePathCopy(Join(_dirHost, HOST_DEFAULT_CONFIG), siteConfig, true) then
+    if installx.FilePathCopy(defaultConfig, siteConfig, true) then
         installx.LogPrint("Created KeelHost config from " .. HOST_DEFAULT_CONFIG)
         return true
     end
@@ -1175,8 +1206,7 @@ local function Progress(percent)
 	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
 end
 
--- Only KeelBase's own keys: the root other TaijiControl products share (Software\TaijiControl\
--- InstallPath) is read for the default path but never written.
+-- The install and component records belong to KeelBase.
 function WriteRegistry()
     local function set(name, value)
         installx.RegSetValue(HRootKey.HKEY_LOCAL_MACHINE, PRODUCT_KEY, name, value)
@@ -1200,6 +1230,32 @@ function WriteRegistry()
     uninst("DisplayIcon", uninstaller)
     uninst("InstallLocation", _dirInstall)
     uninst("UninstallString", "\"" .. uninstaller .. "\"")
+end
+
+local function InstallKeelDeckShortcut()
+    if not ComponentSelected("KeelBase.KeelDeck") then return end
+
+    local desktop = NonEmpty(installx.FilePathGetSpecialLocation(CSIDL.COMMON_DESKTOPDIRECTORY))
+    local deck = Join(_dirInstall, "Deck")
+    local target = Join(deck, "KeelDeck.exe")
+    if not desktop or not installx.FilePathExists(target) then
+        installx.LogPrint("Cannot find the public desktop or KeelDeck.exe")
+        return
+    end
+
+    local hklm = HRootKey.HKEY_LOCAL_MACHINE
+    local path = Join(desktop, DECK_SHORTCUT)
+    local recorded = installx.RegGetValue(hklm, PRODUCT_KEY, "DesktopShortcut")
+    if installx.FilePathExists(path) and not SamePath(path, recorded) then
+        installx.LogPrint("Keeping existing shortcut: " .. path)
+        return
+    end
+
+    if installx.FilePathCreateShortCut(path, target, deck, "KeelBase") then
+        installx.RegSetValue(hklm, PRODUCT_KEY, "DesktopShortcut", path)
+    else
+        installx.LogPrint("Could not create shortcut: " .. path)
+    end
 end
 
 -- Returning false tells the installer that setup did not complete: it shows the failure and
@@ -1246,6 +1302,8 @@ function PostSetup()
         end
     end
 
+    InstallKeelDeckShortcut()
+
     -- The finish page only offers what was installed.
     if not ComponentPresent("KeelBase.Tools") then
         installx.DuiOptionSelect("pathbtn", false, false)
@@ -1261,6 +1319,12 @@ function _FinishInstall()
         local ok, errdesc = installx.SysPathAdd(_dirTools)
         if not ok then
             installx.LogPrint(errdesc)
+        end
+    end
+    local deck = Join(_dirInstall, DECK_EXE)
+    if not installx.SysGetArg("s") and installx.FilePathExists(deck) then
+        if not installx.ProcessExecute('"' .. deck .. '"', false, 0) then
+            installx.LogPrint("Could not launch KeelDeck: " .. deck)
         end
     end
 end

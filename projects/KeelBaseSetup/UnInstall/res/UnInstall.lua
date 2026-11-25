@@ -14,9 +14,10 @@
 -- runtime, which other software may use. Nothing outside the install path is touched: a service of
 -- the recorded name that runs another installation's KeelHost stays as it is.
 
-local DEFAULT_PATH = "C:\\TaijiControl\\KeelBase"
+local DEFAULT_PATH = "C:\\KeelCon\\KeelBase"
 local DEFAULT_SERVICE = "KeelBase"
 local PRODUCT_KEY = "Software\\TaijiControl\\KeelBase"
+local DECK_SHORTCUT = "KeelBase.lnk"
 local UNINSTALL_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
 
 local _dirInstall = DEFAULT_PATH
@@ -163,10 +164,16 @@ function PreSetup()
 
     -- 2. The program directories. Data\ stays; Uninstall\ is the native host's.
     deleteIfExists(_dirHost)
+    deleteIfExists(Join(_dirInstall, "Deck"))
     deleteIfExists(Join(_dirInstall, "Tools"))
     deleteIfExists(Join(_dirInstall, "Redist"))
 
-    -- 3. Registry and PATH.
+    -- 3. The recorded shortcut, registry and PATH.
+    local desktop = NonEmpty(installx.FilePathGetSpecialLocation(CSIDL.COMMON_DESKTOPDIRECTORY))
+    local path = desktop and Join(desktop, DECK_SHORTCUT)
+    if path and SamePath(path, regGet(PRODUCT_KEY, "DesktopShortcut")) then
+        deleteIfExists(path)
+    end
     removePathEntries(Join(_dirInstall, "Tools"))
     installx.RegDeleteKey(HRootKey.HKEY_LOCAL_MACHINE, "Software\\TaijiControl", "KeelBase")
     installx.RegDeleteKey(HRootKey.HKEY_LOCAL_MACHINE, UNINSTALL_KEY, "KeelBase")

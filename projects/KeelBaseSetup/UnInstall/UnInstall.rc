@@ -40,6 +40,7 @@ IDR_MAIN_XML            XML                     "res\\UnInstallDialog.xml"
 IDB_LOGO_PNG            PNG                     "res\\loginlogo.png"
 
 IDB_PNG2                PNG                     "res\\setup.png"
+IDB_RES_BACKGROUND      PNG                     "..\\Install\\res\\background.png"
 
 
 /////////////////////////////////////////////////////////////////////////////

@@ -5,9 +5,9 @@
 <Font name="微软雅黑" size="22"/>
 <Font name="微软雅黑" size="40" bold="true"/>
 <Font name="微软雅黑" size="16"/>
-	<VerticalLayout bkimage="res='131' restype='png' source='0,0,600,220' corner='300,208,300,5'">
+	<VerticalLayout bkcolor="#FFFFFFFF" bkimage="res='138' restype='png' dest='0,0,600,220'">
 		<HorizontalLayout height="40" inset="10,8,10,0">
-			<Label name="piupiulogo" bkimage="res='130' restype='png'" width="24" height="20"/>
+			<Label name="piupiulogo" bkimage="res='130' restype='png'" width="24" height="24"/>
 			<Label name="titletext" text="KeelBase 卸载程序" textcolor="#FFFFFFFF" font="1" height="20" textpadding="10,0,0,0"/>
 			<Button name="closebtn" width="22" height="22" normalimage="res='131' restype='png' source='600,18,622,40'" hotimage="res='131' restype='png' source='622,18,644,40'" pushedimage="res='131' restype='png' source='644,18,666,40'"/>
 		</HorizontalLayout>

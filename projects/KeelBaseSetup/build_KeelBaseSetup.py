@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build the KeelBase Windows installer, KeelBaseSetup_<version>.exe.
 
-Run with any Python 3.9+ on the build machine, after KeelHost (KeelHost.sln, Release) and KeelBase
-(kbase.sln, Release) have been built:
+Run with Python 3.13 on the build machine, after KeelHost and its KeelBase, KeelSim and KeelTrace
+modules (KeelHost.sln, Release) and the KeelBase tools (kbase.sln, Release) have been built:
 
     python build_KeelBaseSetup.py --version 3.0.0.1
 
@@ -10,9 +10,8 @@ Steps:
   1. MSBuild the uninstaller (UnInstall.exe goes into the required Common.7z).
   2. Stage every component archive under bin/stage/<archive>/, with the paths it gets under the
      install path, from the KeelHost and KeelBase build outputs (see collect_components()).
-  3. Check the staged binaries: every DLL they import is in the same directory, in Windows or the
-     VC++ runtime the installer brings; the module's module.xml names kh_keelbase.dll; the staged
-     KeelHost loads the staged module and accepts the instance (`KeelHost.exe module check`).
+  3. Check the staged binaries and their imports, verify each module.xml, and use
+     `KeelHost.exe module check` to load all packaged modules and resolve the KeelBase instance.
   4. Pack each component into Install/res/<archive>.7z and check the archive's members.
   5. Write the version (and the bundled vc_redist's) into Install.lua and the .rc files, MSBuild the
      installer, put the sources back, and copy Install.exe to KeelBaseSetup_<version>.exe.
@@ -28,6 +27,7 @@ import struct
 import subprocess
 import sys
 from pathlib import Path, PureWindowsPath
+from xml.etree import ElementTree
 
 SETUP_ROOT = Path(__file__).resolve().parent
 INSTALL_DIR = SETUP_ROOT / "Install"
@@ -41,7 +41,10 @@ INSTALL_RC = INSTALL_DIR / "Install.rc"
 UNINSTALL_RC = UNINSTALL_DIR / "UnInstall.rc"
 RESOURCE_H = INSTALL_DIR / "resource.h"
 FRAGMENT_TEMPLATE = SETUP_ROOT / "dist" / "020-kbase.xml.template"
+KBASE_PORTS_TEMPLATE = SETUP_ROOT / "dist" / "kbase_server.json.template"
 HOST_CONFIG_SEED = SETUP_ROOT / "dist" / "keelhost.xml"
+DECK_BRANDING = SETUP_ROOT / "dist" / "branding-keelbase.ini"
+DECK_PLUGINS = ("KeelBasePlugin.dll", "KeelSimPlugin.dll", "KeelTracePlugin.dll")
 
 SEVEN_ZIP_ARGS = ["-t7z", "-mx=5", "-m0=LZMA2", "-md=16m", "-mfb=32", "-ms=64m", "-mmt=on"]
 
@@ -51,6 +54,7 @@ SEVEN_ZIP_ARGS = ["-t7z", "-mx=5", "-m0=LZMA2", "-md=16m", "-mfb=32", "-ms=64m",
 HOST_FILES = (
     "KeelHost.exe",
     "zce.dll",
+    "libidh.dll",
     "libpq.dll",
     "libssl-3-x64.dll",
     "libcrypto-3-x64.dll",
@@ -196,9 +200,54 @@ class Component:
         self.files = files            # {path under the install path: source file}
 
 
+def collect_module_files(module_dir, name, *extra_files):
+    return {f"Host/modules/{name}/{file}": module_dir / file
+            for file in (f"kh_{name.lower()}.dll", "module.xml", *extra_files)}
+
+
+def collect_python_files(python_dir):
+    # The pyhost executable loads python313.dll from beside itself. Its default Python home
+    # lookup also recognizes ../WinPy313/python relative to the executable before site-wide Python.
+    # Use the stock standard library and never copy the build machine's Python packages.
+    module_path = "Host/modules/KeelSim"
+    home_path = "Host/modules/WinPy313/python"
+    files = {
+        f"{module_path}/python313.dll": python_dir / "python313.dll",
+        f"{module_path}/python3.dll": python_dir / "python3.dll",
+        f"{home_path}/LICENSE.txt": python_dir / "LICENSE.txt",
+    }
+    if not (python_dir / "Lib" / "encodings" / "__init__.py").is_file() or not (python_dir / "DLLs").is_dir():
+        raise SystemExit(f"{python_dir} is not a complete Windows Python 3.13 installation; pass --python-dir")
+    excluded = {"__pycache__", "site-packages", "ensurepip"}
+    for directory in ("Lib", "DLLs"):
+        for path in sorted((python_dir / directory).rglob("*")):
+            relative = path.relative_to(python_dir)
+            if excluded.isdisjoint(relative.parts) and path.is_file() and path.suffix not in (".pyc", ".pyo"):
+                files[f"{home_path}/{relative.as_posix()}"] = path
+    return files
+
+
+def collect_deck_files(deck_dir):
+    """Stage the KeelDeck deployment prepared by tools/package_windows.ps1."""
+    required = ("KeelDeck.exe", "keeldeck_core.dll", "libQWT.dll", "Qt6Core.dll", "qt.conf",
+                "platforms/qwindows.dll", "license/README.md",
+                *(f"plugins/{name}" for name in DECK_PLUGINS))
+    files = {f"Deck/{member}": deck_dir / member for member in required}
+    files["Deck/branding.ini"] = DECK_BRANDING
+    for path in sorted(deck_dir.rglob("*")):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        relative = path.relative_to(deck_dir)
+        if len(relative.parts) == 2 and relative.parts[0] == "plugins" and path.name not in DECK_PLUGINS:
+            raise SystemExit(f"{deck_dir}: unexpected KeelDeck plugin {path.name}")
+        if relative.parts[0] == "license" or path.suffix.lower() in (".dll", ".qm"):
+            files[f"Deck/{relative.as_posix()}"] = path
+    return files
+
+
 def collect_components(args):
     """The archives and what goes into each, with the paths they get under the install path
-    (default C:\\TaijiControl\\KeelBase): Host\\ is KeelBase's own KeelHost, Tools\\ the command-line
+    (default C:\\KeelCon\\KeelBase): Host\\ is KeelBase's own KeelHost, Tools\\ the command-line
     tools, Redist\\ the runtime installers, Uninstall\\ the uninstaller."""
     host_dir, module_dir, kbase_bin = args.host_dir, args.module_dir, args.kbase_bin
     common = {
@@ -212,12 +261,12 @@ def collect_components(args):
     server = {f"Host/{name}": host_dir / name for name in HOST_FILES}
     server.update({
         "Host/keelhost.default.xml": args.host_config,
-        "Host/modules/KeelBase/kh_keelbase.dll": module_dir / "kh_keelbase.dll",
-        "Host/modules/KeelBase/module.xml": module_dir / "module.xml",
         # The data-plane client other modules (SoftSensor, KeelTrace) load from the KeelBase module.
         "Host/modules/KeelBase/kbase_client.dll": kbase_bin / "kbase_client.dll",
         "Host/keelhost.d/020-kbase.xml.template": FRAGMENT_TEMPLATE,
+        "Host/kbase_server.json.template": KBASE_PORTS_TEMPLATE,
     })
+    server.update(collect_module_files(module_dir, "KeelBase"))
     tools = {"Tools/kbased.exe": kbase_bin / "kbased.exe"}
     kbasecli = args.kbasecli or kbase_bin / "kbasecli.exe"
     if kbasecli.is_file():
@@ -225,11 +274,16 @@ def collect_components(args):
     else:
         print(f"Note: {kbasecli} not found, KeelBaseTools.7z carries kbased.exe only "
               "(pass --kbasecli, or build kbasecli in kbase.sln, to add it)")
+    sim = collect_module_files(args.keelsim_dir, "KeelSim", "keelsim_pyhost.exe")
+    sim.update(collect_python_files(args.python_dir))
     return [
         Component("Common.7z", 150, common),
         Component("OpcCore.7z", 151, opc),
         Component("KeelBaseServer.7z", 160, server),
         Component("KeelBaseTools.7z", 161, tools),
+        Component("KeelSim.7z", 162, sim),
+        Component("KeelTrace.7z", 163, collect_module_files(args.keeltrace_dir, "KeelTrace")),
+        Component("KeelDeck.7z", 164, collect_deck_files(args.deck_dir)),
     ]
 
 
@@ -259,12 +313,13 @@ def check_package_definitions(components):
         raise SystemExit(f"Install.lua COMPONENTS res IDs {lua_ids} do not match the archives {sorted(built.values())}")
 
 
-def check_module_xml(path):
-    text = Path(path).read_text(encoding="utf-8-sig")
-    if not re.search(r"<module\s+name=\"KeelBase\"", text) or 'windows="kh_keelbase.dll"' not in text:
-        raise SystemExit(f"{path} does not describe module KeelBase with kh_keelbase.dll")
-    if not re.search(r"<vmtype\s+name=\"KeelBase\"", text):
-        raise SystemExit(f"{path} does not provide vmtype KeelBase")
+def check_module_xml(path, name):
+    module = ElementTree.parse(path).getroot()
+    dll = f"kh_{name.lower()}.dll"
+    if module.tag != "module" or module.get("name") != name or module.find(f"library[@windows='{dll}']") is None:
+        raise SystemExit(f"{path} does not describe module {name} with {dll}")
+    if module.find(f"vmtype[@name='{name}']") is None:
+        raise SystemExit(f"{path} does not provide vmtype {name}")
 
 
 def stage(components):
@@ -285,16 +340,22 @@ def check_imports(components):
     runtime that Common.7z installs."""
     system_dir = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
     host_dir = STAGE_ROOT / "KeelBaseServer" / "Host"
+    deck_dir = STAGE_ROOT / "KeelDeck" / "Deck"
     problems = []
     for component in components:
         root = STAGE_ROOT / Path(component.archive).stem
         for member in component.files:
             path = root / PureWindowsPath(member)
-            if path.suffix.lower() not in (".exe", ".dll"):
+            if path.suffix.lower() not in (".exe", ".dll", ".pyd"):
                 continue
             search = [path.parent]
             if member.lower().startswith("host/"):
                 search.append(host_dir)
+            if member.startswith("Deck/"):
+                search.append(deck_dir)
+            if member.startswith("Host/modules/WinPy313/python/"):
+                # The pyhost already imports python313.dll before loading the Python extensions.
+                search.append(root / "Host" / "modules" / "KeelSim")
             for name in pe_imports(path):
                 if not import_is_available(name, search, system_dir):
                     problems.append(f"{member} imports {name}, which the package does not carry")
@@ -304,21 +365,23 @@ def check_imports(components):
 
 
 def check_module_loads():
-    """KeelHost from the package loads the KeelBase module from the package, and accepts the
-    instance of the fragment template next to the seeded config, as a first install leaves them:
-    `KeelHost.exe module check` loads every module and checks every declared instance's vmtype
-    (zce ABI and build id included) without starting anything."""
+    """Load the packaged modules and resolve kbase01 without starting the service."""
     check_root = STAGE_ROOT / "_check"
     if check_root.exists():
         shutil.rmtree(check_root)
     shutil.copytree(STAGE_ROOT / "KeelBaseServer", check_root)
+    for name in ("KeelSim", "KeelTrace"):
+        shutil.copytree(STAGE_ROOT / name, check_root, dirs_exist_ok=True)
     host = check_root / "Host"
     shutil.copy2(host / "keelhost.default.xml", host / "keelhost.xml")
     shutil.copy2(host / "keelhost.d" / "020-kbase.xml.template", host / "keelhost.d" / "020-kbase.xml")
     result = subprocess.run([str(host / "KeelHost.exe"), "module", "check"], cwd=host, capture_output=True,
                             text=True, timeout=120)
     print(result.stdout.strip())
-    if result.returncode != 0 or not re.search(r"^ok\s+instance kbase01 \(KeelBase\)", result.stdout, re.M):
+    modules = ("KeelBase", "KeelSim", "KeelTrace")
+    if (result.returncode != 0
+            or not all(re.search(rf"^ok\s+{name} ", result.stdout, re.M) for name in modules)
+            or not re.search(r"^ok\s+instance kbase01 \(KeelBase\)", result.stdout, re.M)):
         raise SystemExit(f"KeelHost.exe module check failed (exit {result.returncode}):\n{result.stdout}{result.stderr}")
     shutil.rmtree(check_root)
 
@@ -347,9 +410,12 @@ def pack(components, seven_zip):
         print(f"Packed {target.name}: {len(files)} files, {target.stat().st_size // 1024} KiB")
 
 
-def msbuild(msbuild_exe, target):
-    subprocess.run([str(msbuild_exe), str(SLN_FILE), "/p:Configuration=Release", "/p:Platform=x64",
-                    f"/t:{target}", "/m", "/nologo", "/v:minimal"], check=True)
+def msbuild(msbuild_exe, target, platform_toolset):
+    command = [str(msbuild_exe), str(SLN_FILE), "/p:Configuration=Release", "/p:Platform=x64",
+               f"/t:{target}", "/m", "/nologo", "/v:minimal"]
+    if platform_toolset:
+        command.append(f"/p:PlatformToolset={platform_toolset}")
+    subprocess.run(command, check=True)
 
 
 def write_versions(version, vc_redist_version):
@@ -400,22 +466,32 @@ def parse_args():
     parser.add_argument("--workspace", type=Path, default=workspace, help="the cxxproj workspace (default: found above this script)")
     parser.add_argument("--host-dir", type=Path, help="KeelHost Release output (default: <workspace>/hosts/KeelHost/bin/x64/HostVM)")
     parser.add_argument("--module-dir", type=Path, help="the KeelBase module (default: <host-dir>/modules/KeelBase)")
+    parser.add_argument("--keelsim-dir", type=Path, help="the KeelSim module (default: <host-dir>/modules/KeelSim)")
+    parser.add_argument("--keeltrace-dir", type=Path, help="the KeelTrace module (default: <host-dir>/modules/KeelTrace)")
+    parser.add_argument("--python-dir", type=Path, default=Path(sys.base_prefix),
+                        help="Windows Python 3.13 installation to bundle for KeelSim (default: running Python)")
     parser.add_argument("--kbase-bin", type=Path, help="KeelBase Release output (default: <workspace>/modules/KeelBase/bin/x64/Release)")
     parser.add_argument("--kbasecli", type=Path, help="kbasecli.exe to ship (default: <kbase-bin>/kbasecli.exe when it exists)")
+    parser.add_argument("--deck-dir", type=Path,
+                        help="deployed KeelDeck client (default: <workspace>/apps/KeelDeck/dist/package/KeelBase)")
     parser.add_argument("--host-config", type=Path, default=HOST_CONFIG_SEED,
                         help="KeelHost config seed, shipped as Host/keelhost.default.xml (default: dist/keelhost.xml next to this script)")
     parser.add_argument("--opc-dir", type=Path, help="GBDA_Install_Prereq_x64/x86.msi (default: <workspace>/apps/KeelDeck/bin/x64/Common/opc)")
     parser.add_argument("--vc-redist", type=Path, help="vc_redist.x64.exe (default: the newest MSVC toolset's in Visual Studio)")
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR, help="where KeelBaseSetup_<version>.exe goes")
+    parser.add_argument("--platform-toolset", help="override the Visual C++ toolset when building setup")
     parser.add_argument("--stage-only", action="store_true", help="stop after staging, checking and packing the archives")
     args = parser.parse_args()
 
-    if args.workspace is None and not all((args.host_dir, args.kbase_bin, args.opc_dir)):
+    if args.workspace is None and not all((args.host_dir, args.kbase_bin, args.opc_dir, args.deck_dir)):
         parser.error("cannot find the cxxproj workspace above this script; pass --workspace")
     ws = args.workspace
     args.host_dir = args.host_dir or ws / "hosts" / "KeelHost" / "bin" / "x64" / "HostVM"
     args.module_dir = args.module_dir or args.host_dir / "modules" / "KeelBase"
+    args.keelsim_dir = args.keelsim_dir or args.host_dir / "modules" / "KeelSim"
+    args.keeltrace_dir = args.keeltrace_dir or args.host_dir / "modules" / "KeelTrace"
     args.kbase_bin = args.kbase_bin or ws / "modules" / "KeelBase" / "bin" / "x64" / "Release"
+    args.deck_dir = args.deck_dir or ws / "apps" / "KeelDeck" / "dist" / "package" / "KeelBase"
     args.opc_dir = args.opc_dir or ws / "apps" / "KeelDeck" / "bin" / "x64" / "Common" / "opc"
     args.vc_redist = args.vc_redist or find_vc_redist()
     if args.vc_redist is None:
@@ -441,13 +517,15 @@ def main():
     print("\n== 1. Uninstaller")
     originals = write_versions(args.version, vc_redist_version)
     try:
-        msbuild(msbuild_exe, r"src\UnInstall")
+        msbuild(msbuild_exe, r"src\UnInstall", args.platform_toolset)
 
         print("\n== 2. Stage")
         components = collect_components(args)
         check_package_definitions(components)
         check_sources(components)
-        check_module_xml(args.module_dir / "module.xml")
+        check_module_xml(args.module_dir / "module.xml", "KeelBase")
+        check_module_xml(args.keelsim_dir / "module.xml", "KeelSim")
+        check_module_xml(args.keeltrace_dir / "module.xml", "KeelTrace")
         stage(components)
 
         print("\n== 3. Check")
@@ -460,7 +538,7 @@ def main():
             return
 
         print("\n== 5. Installer")
-        msbuild(msbuild_exe, "Build")
+        msbuild(msbuild_exe, "Build", args.platform_toolset)
     finally:
         restore_sources(originals)
 

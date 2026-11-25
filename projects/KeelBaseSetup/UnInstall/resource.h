@@ -19,6 +19,7 @@
 #define IDR_LUA_SCRIPT1                 133
 #define IDR_LUA_SCRIPT2                 134
 #define IDR_LUA_SCRIPT                  135
+#define IDB_RES_BACKGROUND              138
 #define IDC_STATIC                      -1
 
 // Next default values for new objects
