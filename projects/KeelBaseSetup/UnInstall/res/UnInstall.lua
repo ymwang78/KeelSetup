@@ -4,19 +4,20 @@
 -- The native host (CUninstallMainFrame) drives the UI, then calls:
 --   OnInitialize()  -- when the window is ready
 --   PreSetup()      -- after the user confirms (at once for /s), on the worker thread
--- and afterwards ends the kbased.exe of the install path, recursively deletes the directory the
--- running UnInstall.exe lives in (<InstallPath>\Uninstall), self-deletes it, and removes the
--- install path if nothing is left in it.
+-- The native host stops the installed KeelDeck and kbased before PreSetup(), then removes
+-- the directory of the running UnInstall.exe (<InstallPath>\Uninstall) after Lua cleanup.
+-- It removes the install path if nothing is left in it.
 --
 -- PreSetup() undoes the rest of projects/KeelBaseSetup/Install/Install.lua: KeelBase's own KeelHost
--- service, Host\, Tools\ and Redist\, the registry entries and the PATH entry. The instances' data in
+-- service, Host\, Deck\, Tools\ and Redist\, the registry entries and the PATH entry. The instances' data in
 -- Data\ (KeelHost's projects_dir) is never deleted, nor are the OPC Core Components and the VC++
 -- runtime, which other software may use. Nothing outside the install path is touched: a service of
 -- the recorded name that runs another installation's KeelHost stays as it is.
 
-local DEFAULT_PATH = "C:\\TaijiControl\\KeelBase"
+local DEFAULT_PATH = "C:\\KeelCon\\KeelBase"
 local DEFAULT_SERVICE = "KeelBase"
 local PRODUCT_KEY = "Software\\TaijiControl\\KeelBase"
+local DECK_SHORTCUT = "KeelBase.lnk"
 local UNINSTALL_KEY = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
 
 local _dirInstall = DEFAULT_PATH
@@ -163,10 +164,16 @@ function PreSetup()
 
     -- 2. The program directories. Data\ stays; Uninstall\ is the native host's.
     deleteIfExists(_dirHost)
+    deleteIfExists(Join(_dirInstall, "Deck"))
     deleteIfExists(Join(_dirInstall, "Tools"))
     deleteIfExists(Join(_dirInstall, "Redist"))
 
-    -- 3. Registry and PATH.
+    -- 3. The recorded shortcut, registry and PATH.
+    local desktop = NonEmpty(installx.FilePathGetSpecialLocation(CSIDL.COMMON_DESKTOPDIRECTORY))
+    local path = desktop and Join(desktop, DECK_SHORTCUT)
+    if path and SamePath(path, regGet(PRODUCT_KEY, "DesktopShortcut")) then
+        deleteIfExists(path)
+    end
     removePathEntries(Join(_dirInstall, "Tools"))
     installx.RegDeleteKey(HRootKey.HKEY_LOCAL_MACHINE, "Software\\TaijiControl", "KeelBase")
     installx.RegDeleteKey(HRootKey.HKEY_LOCAL_MACHINE, UNINSTALL_KEY, "KeelBase")

@@ -31,10 +31,8 @@ public:
 	static unsigned int _stdcall UnInstallThread(void* param);
 	void ClearUnInstall();
 	void UnInstall();
-	void KillProcess();
-	bool IsInInstallDir(const std::wstring& path) const;
+	static int GetExitCode();
 	static std::string ParentDir(std::string dir);
-	BOOL ProcessPrivilege(BOOL bEnable);
 	void GetUnInstallSize(std::wstring &strFile, int &nUnInstall);
 	void DeleteAllFile(std::wstring &strFile, int &nCurUnInstall, int nUnInstall);
 

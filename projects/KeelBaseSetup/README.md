@@ -11,7 +11,7 @@ KeelBase 用**自己的一份 KeelHost**，与其他产品（TaijiMPC6）安装�
 
 ## 目录与端口
 
-安装目录默认 `C:\TaijiControl\KeelBase`（共享根 `HKLM\Software\TaijiControl\InstallPath` 存在时取它下面的 `KeelBase\`）：
+首次安装默认使用 `C:\KeelCon\KeelBase`。升级沿用已记录的 KeelBase 安装目录，`/path=` 可显式指定目录。
 
 ```
 <安装目录>\
@@ -19,8 +19,12 @@ KeelBase 用**自己的一份 KeelHost**，与其他产品（TaijiMPC6）安装�
     keelhost.default.xml     配置种子（dist/keelhost.xml），首次安装复制成 keelhost.xml
     keelhost.d\020-kbase.xml 实例 kbase01（首次安装从 .template 生成）
     modules\KeelBase\        kh_keelbase.dll、module.xml、kbase_client.dll
+    modules\KeelSim\         仿真后端与 Python 子进程（可选）
+    modules\WinPy313\python\ KeelSim 使用的 Python 3.13 标准库和扩展
+    modules\KeelTrace\       数据采集后端（可选）
     log\
   Data\                      KeelHost 的 projects_dir：kbase01\（kbase_server.json、data\）、subvm.db
+  Deck\                      KeelDeck.exe、Qt 运行时和三项界面插件
   Tools\                     kbased.exe（构建里有 kbasecli.exe 时一并带上）
   Redist\                    vc_redist.x64.exe、opc\GBDA_Install_Prereq_x64/x86.msi
   Uninstall\UnInstall.exe
@@ -31,11 +35,12 @@ KeelBase 用**自己的一份 KeelHost**，与其他产品（TaijiMPC6）安装�
 | 7820/TCP | KeelHost 控制面（zmis，KeelDeck 连这里） |
 | 7820/UDP | KeelHost 日志收集 |
 | 7821/TCP | KeelHost 事件（storm） |
-| 8080/TCP、9090/TCP | 实例 kbase01 的 REST 与数据端口（实例默认值，在 `Data\kbase01\kbase_server.json` 里改） |
+| 7822–7825/TCP | 预留给现场需要固定端口的实例 |
+| 7826/TCP、7827/TCP | 预留给 `ksim` 和 `ktrace` 实例 |
+| 7828/TCP、7829/TCP | 新装默认实例 `kbase01` 的 REST 与数据端口（`Data\kbase01\kbase_server.json`） |
 
-7820/7821 在 IANA 未分配（7811–7844 段），避开了 TaijiMPC6 的 HostVM 用的 22500/22501，也避开了
-Clash 系代理软件的默认端口 7890/7891（Clash Verge Rev 是 7897）。端口在 `Host\keelhost.xml` 里改，
-它归现场所有，升级不覆盖。
+KeelBase 的固定端口统一保留在 `7820–7829`。控制面和事件端口在 `Host\keelhost.xml` 配置，
+具名工作进程的固定端口在对应的 KeelHost 实例配置里设置。其余工作进程由 KeelHost 自动分配端口。
 
 ## 组件
 
@@ -45,8 +50,15 @@ Clash 系代理软件的默认端口 7890/7891（Clash Verge Rev 是 7897）。�
 | Common.OpcCore | 151 | OpcCore.7z | `Redist\opc\` 两个 Graybox OPC 核心组件安装包 |
 | KeelBase.Server | 160 | KeelBaseServer.7z | `Host\` 整个：KeelHost、配置种子、KeelBase 模块、实例片段模板 |
 | KeelBase.Tools | 161 | KeelBaseTools.7z | `Tools\kbased.exe`（及 kbasecli.exe） |
+| KeelBase.KeelSim | 162 | KeelSim.7z | KeelSim 模块、`keelsim_pyhost.exe`、Python 3.13 运行时 |
+| KeelBase.KeelTrace | 163 | KeelTrace.7z | KeelTrace 模块 |
+| KeelBase.KeelDeck | 164 | KeelDeck.7z | KeelDeck 客户端及 KeelBase、KeelSim、KeelTrace 界面插件 |
 
-首次安装默认全选；升级（本安装程序在同一目录装过）默认选上次装的组件。
+首次安装时 KeelSim 和 KeelTrace 默认勾选，可分别取消。选中任一模块会同时选中 Server，让模块与随包的
+KeelHost 一起安装或更新。升级时默认选中上次安装的组件。KeelHost 加载模块后可按需创建相应实例。
+KeelDeck 客户端在首次安装和升级时均默认勾选，可取消或单独安装。安装后可用公共桌面的
+`KeelBase` 快捷方式启动 `Deck\KeelDeck.exe`，新建连接时默认端口为 `7820`。
+完成页的 Run 按钮打开本次安装目录中的客户端。
 
 ## 安装做了什么
 
@@ -66,13 +78,13 @@ Clash 系代理软件的默认端口 7890/7891（Clash Verge Rev 是 7897）。�
 4. 解压选中的组件包。
 5. Server：`keelhost.xml` 和 `hostvm.xml` 都不存在时，从 `keelhost.default.xml` 生成 `keelhost.xml`
    （两者同时存在 KeelHost 拒绝启动）；`keelhost.d\020-kbase.xml` 不存在、且现场没在主配置或别的片段里
-   声明模板里的 subvm 时从模板生成；只声明了一部分时报错中止。已有的都归现场所有，升级不动。
+   声明模板里的 subvm 时从模板生成；只声明了一部分时报错中止。新建默认主配置时，如果 `Data\kbase01`
+   下还没有 `kbase_server.json` 或旧版 `config.json`，写入 REST `7828` 和数据 `7829`。升级沿用现场配置。
 6. VC++ 运行库：注册表里的 x64 运行库版本低于随包的 `vc_redist.x64.exe` 时安装。
 7. OpcCore：64 位、32 位两半各自检查（接口代理/存根、OpcEnum 是否已注册且文件在），缺哪半装哪半。
    KeelBase 的 OPC DA/HDA 服务和它的客户端都要它；KeelBase 不自带接口代理。
 8. 注册表：只写 `HKLM\Software\TaijiControl\KeelBase`（`InstallPath`、`Version`、`ServiceName`、
-   `Components\<组件>`）和卸载项 `...\Uninstall\KeelBase`；共享的 `Software\TaijiControl\InstallPath`
-   只读不写。
+   `Components\<组件>`）和卸载项 `...\Uninstall\KeelBase`。
 9. Server：服务不存在时 `service install <服务>`，然后 `service start <服务>`，再观察 5 秒：服务没在运行
    （端口被占、现场配置有误）就报安装失败（静默安装退出码 1），提示看 `Host\log`。要观察而不是立刻读状态，
    是因为 libzce 在 KeelHost 打开端口之前就把服务报成了 RUNNING。只装工具时不碰服务。
@@ -86,6 +98,7 @@ KeelBaseSetup_3.0.0.1.exe /s                                   静默安装，�
 KeelBaseSetup_3.0.0.1.exe /s /path=D:\KeelBase                 安装目录
 KeelBaseSetup_3.0.0.1.exe /s /service=KeelBase2                服务名（同一台机器装第二份时用）
 KeelBaseSetup_3.0.0.1.exe /s /components=KeelBase.Tools        只装指定的组/组件（及必装组件）
+KeelBaseSetup_3.0.0.2.exe /s /components=KeelBase.KeelSim,KeelBase.KeelTrace
 UnInstall.exe /s                                               静默卸载
 ```
 
@@ -98,27 +111,36 @@ UnInstall.exe /s                                               静默卸载
 `<安装目录>\Uninstall\UnInstall.exe`（“应用和功能”里的 KeelBase 指向它，需要管理员权限）：
 
 - 服务运行的是本安装目录的 KeelHost 时，停止并删除它；别处安装的同名服务不碰。
-- 删除 `Host\`、`Tools\`、`Redist\`、`Uninstall\`，只结束本安装目录里的 kbased.exe；目录里的 junction
+- 删除 `Host\`、`Deck\`、`Tools\`、`Redist\`、`Uninstall\`，只结束本安装目录里的 kbased.exe 和 KeelDeck.exe；目录里的 junction
   和链接只删链接本身，不跟进去。在确认对话框里取消就直接退出，什么都不删。
 - `Data\`（实例数据）保留；安装目录空了才删除。OPC Core Components 和 VC++ 运行库不卸载。
-- 删除注册表项和 PATH 里的 `<安装目录>\Tools`。
+- 删除安装程序创建的 `KeelBase` 桌面快捷方式、注册表项和 PATH 里的 `<安装目录>\Tools`。
 
 ## 构建
 
-前提：KeelHost（`hosts/KeelHost/KeelHost.sln`，Release，输出 `bin\x64\HostVM\`，含
-`modules\KeelBase\kh_keelbase.dll`）和 KeelBase（`modules/KeelBase/kbase.sln`，Release）已编好；
-装有 Visual Studio（MSBuild、vswhere）和 7-Zip。
+前提：KeelHost（`hosts/KeelHost/KeelHost.sln`，x64 Release，输出 `bin\x64\HostVM\`，含
+KeelBase、KeelSim、KeelTrace 模块）和 KeelBase 工具（`modules/KeelBase/kbase.sln`，x64 Release）已编好。
+KeelTrace 应使用支持 `kbase_client.dll` 的版本。打包机需要 Visual Studio、7-Zip 和 Windows x64 Python 3.13。
+
+在 KeelDeck 目录按其 `THIRD_PARTY_RELEASE.md` 准备许可材料和匹配的 Qwt 源码归档，然后部署客户端。
+
+```powershell
+pwsh tools/package_windows.ps1 -BuildDir bin/x64/Release -Branding ../KeelSetup/projects/KeelBaseSetup/dist/branding-keelbase.ini -OutDir dist/package/KeelBase
+```
+
+在 KeelSetup 目录生成安装包。
 
 ```
-python projects/KeelBaseSetup/build_KeelBaseSetup.py --version 3.0.0.1
+python projects/KeelBaseSetup/build_KeelBaseSetup.py --version 3.0.0.6
 ```
 
 脚本依次：编卸载程序 → 按组件暂存到 `bin\stage\` → 检查每个 exe/dll 的导入（必须在同目录、`Host\`、
 Windows 或随包 VC++ 运行库里）和 `module.xml`，并对暂存的 KeelHost + 模块 + 实例跑
 `KeelHost.exe module check` → 打 `Install\res\*.7z` 并核对包内文件 → 把版本号（以及随包 vc_redist 的版本）
 写进 `Install.lua`、两个 `.rc`，编安装程序后改回 → `bin\x64\Release\KeelBaseSetup_<版本>.exe`。
-各输入可用 `--host-dir`、`--module-dir`、`--kbase-bin`、`--kbasecli`、`--host-config`、`--opc-dir`、
-`--vc-redist` 覆盖；`--stage-only` 只到打包为止。
+各输入可用 `--host-dir`、`--module-dir`、`--keelsim-dir`、`--keeltrace-dir`、`--python-dir`、
+`--kbase-bin`、`--kbasecli`、`--deck-dir`、`--host-config`、`--opc-dir`、`--vc-redist` 覆盖。
+`--platform-toolset v145` 适用于只安装了 Visual Studio 18 工具集的机器，`--stage-only` 只到组件打包为止。
 
 `vc_redist.x64.exe` 默认取 Visual Studio 里最新 MSVC 工具集的那份：二进制需要不低于编译它们的工具集的运行库。
 OPC 安装包默认取 `apps/KeelDeck/bin/x64/Common/opc`（与 TaijiMPC6 同一份）。
@@ -140,7 +162,6 @@ lua tests/test_keelbase_setup.lua
 - KeelBase 仓库还没有 kbasecli 的 Windows 工程时，工具组件只带 `kbased.exe`。
 - 同机其他产品的模块要通过 KeelHost 发现 KeelBase 实例时，要指向 KeelBase 的 KeelHost（7820），
   它们不在同一套 KeelHost 里。
-- 界面图片沿用 TaijiMPC6 的。
 
 ## 实测（2026-11-23，Windows Server 2025，本机另有 TaijiMPC6 的 HostVM 服务在跑）
 

@@ -97,6 +97,7 @@ Demo installers are under `projects/` and need their binary `.7z` resources pres
 |----------|-------------|
 | `ProcessExecute(cmd, hidden, waitSec)` | Run process (MSI-aware) |
 | `ProcessKill(name)` | Kill process by name |
+| `ProcessStopAtPath(path)` | Terminate processes matching the executable path and wait for exit. Returns true on success or false and a Win32 error |
 | `RunAsAdmin()` | UAC elevation |
 | `SetupFailed(reason)` | Mark setup as failed (non-zero exit code); a silent `/s` install closes |
 | `ServiceState(name)` | Windows service state: "running", "stopped", "start_pending", ... ; nil if no such service |

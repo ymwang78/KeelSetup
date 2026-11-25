@@ -7,6 +7,7 @@
 #include "HostVMConfig.h"
 #include "RegistryValue.h"
 #include "FileSecurity.h"
+#include "ProcessPath.h"
 #include <ShlObj_core.h>
 #include <sstream>
 #include <iostream>
@@ -1001,6 +1002,18 @@ static int l_ProcessKill(lua_State * L)
     return 1;
 }
 
+// ProcessStopAtPath(path): true when no matching process is running, or false and a Win32 error.
+extern "C"
+static int l_ProcessStopAtPath(lua_State* L)
+{
+    const char* path = luaL_checkstring(L, 1);
+    DWORD error = stopProcessAtPath(Utf82Unicode(path));
+    APPLOG(LOG_TRACE)("ProcessStopAtPath: %s (error %lu)\n", path, error);
+    lua_pushboolean(L, error == ERROR_SUCCESS);
+    lua_pushinteger(L, error);
+    return 2;
+}
+
 extern "C"
 static int l_RunAsAdmin(lua_State * L)
 {
@@ -1659,6 +1672,7 @@ static const luaL_Reg reglib[] = {
 
     {"ProcessExecute", l_ProcessExecute},
     {"ProcessKill", l_ProcessKill},
+    {"ProcessStopAtPath", l_ProcessStopAtPath},
 
     {"RunAsAdmin", l_RunAsAdmin},
     {"ServiceState", l_ServiceState},

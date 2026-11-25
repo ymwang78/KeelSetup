@@ -25,6 +25,9 @@
 #define IDR_PKG_COMMON_OPCCORE          151
 #define IDR_PKG_KEELBASE_SERVER         160
 #define IDR_PKG_KEELBASE_TOOLS          161
+#define IDR_PKG_KEELSIM                 162
+#define IDR_PKG_KEELTRACE               163
+#define IDR_PKG_KEELDECK                164
 #define IDC_STATIC                      -1
 
 // Next default values for new objects
