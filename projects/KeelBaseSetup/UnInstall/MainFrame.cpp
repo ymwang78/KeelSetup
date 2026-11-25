@@ -6,6 +6,7 @@
 #include <shellapi.h>
 #include <Shlwapi.h>
 #include <atomic>
+#include <filesystem>
 #include <InstallXpress/ProcessPath.h>
 #include <Utility/log.h>
 #include "Utility/Utility.h"
@@ -265,7 +266,7 @@ void CUninstallMainFrame::UnInstall()
     std::wstring wstrdir = CTypeConvertUtil::StringToWstring(m_strUnInstallDir);
 
 	CDuiString hintString;
-	std::wstring installDir = CTypeConvertUtil::StringToWstring(ParentDir(m_strUnInstallDir));
+	std::filesystem::path installDir = std::filesystem::path(wstrdir).parent_path();
 	hintString.Format(L"是否卸载 KeelBase（%s）？KeelBase 服务和程序文件将被删除，实例数据（%s\\Data）保留。",
 		installDir.c_str(), installDir.c_str());
 	int ret = m_bSilent ? IDOK : MessageBox(GetHWND(), hintString, L"提示", MB_OKCANCEL);
@@ -278,24 +279,37 @@ void CUninstallMainFrame::UnInstall()
 		return;
 	}
 
-	// Use the same directory as Lua, which deletes Deck and Tools in PreSetup().
-	std::wstring cleanupDir = m_luaPtr ? Utf82Unicode(m_luaPtr->QueryByKey_String("InstallPath")) : L"";
-	if (cleanupDir.empty())
-		cleanupDir = installDir;
-	for (const wchar_t* executable : { L"\\Deck\\KeelDeck.exe", L"\\Tools\\kbased.exe" })
+	auto fail = [this](const CDuiString& message) {
+		APPLOG(Log::LOG_ERROR)("Uninstall failed: %s\n", UnicodeToUtf8(message.GetData()).c_str());
+		if (!m_bSilent)
+			MessageBox(GetHWND(), message, L"KeelBase", MB_OK | MB_ICONERROR);
+		uninstallExitCode = 1;
+		PostMessage(WM_CLOSE, 0, 0);
+	};
+
+	// PreSetup() uses the registered install path. A stale uninstaller must leave the other
+	// installation's processes, files and registration alone.
+	if (m_luaPtr)
 	{
-		std::wstring path = cleanupDir + executable;
+		std::wstring registeredDir = Utf82Unicode(m_luaPtr->QueryByKey_String("InstallPath"));
+		std::error_code pathError;
+		if (!std::filesystem::equivalent(installDir, registeredDir, pathError))
+		{
+			hintString.Format(L"当前卸载程序目录属于 %s，但系统登记的 KeelBase 安装目录为 %s。请从系统设置启动卸载。",
+				installDir.c_str(), registeredDir.c_str());
+			fail(hintString);
+			return;
+		}
+	}
+
+	for (const wchar_t* executable : { L"Deck\\KeelDeck.exe", L"Tools\\kbased.exe" })
+	{
+		std::wstring path = (installDir / executable).wstring();
 		DWORD error = stopProcessAtPath(path);
 		if (error != ERROR_SUCCESS)
 		{
-			APPLOG(Log::LOG_ERROR)("Cannot stop %s (error %lu)\n", UnicodeToUtf8(path).c_str(), error);
-			if (!m_bSilent)
-			{
-				hintString.Format(L"无法关闭 %s（错误 %lu）。请退出该程序后重新运行卸载。", path.c_str(), error);
-				MessageBox(GetHWND(), hintString, L"KeelBase", MB_OK | MB_ICONERROR);
-			}
-			uninstallExitCode = 1;
-			PostMessage(WM_CLOSE, 0, 0);
+			hintString.Format(L"无法关闭 %s（错误 %lu）。请退出该程序后重新运行卸载。", path.c_str(), error);
+			fail(hintString);
 			return;
 		}
 	}
