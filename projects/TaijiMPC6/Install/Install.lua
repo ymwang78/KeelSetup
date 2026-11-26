@@ -13,6 +13,9 @@ local RES = {
 
 -- apps/KeelDeck/build_TaijiMPC6.py writes the release version here at build time and restores it afterwards.
 local _VERSION = "5.2.41.3"
+-- It also writes the file version of the Common\vcredist\vc_redist.x64.exe it packs: the programs
+-- need at least the VC++ runtime of the toolset that built them, which is the one bundled.
+local VC_REDIST_VERSION = "14.51.36231.0"
 local _dirCompany = "C:\\TaijiControl"
 local _dirExeHomeDir = _dirCompany .. "\\TaiJiMPC6"
 local _dirExeFullPath = _dirCompany .. "\\TaiJiMPC6\\TaiJiMPC.exe"
@@ -34,6 +37,8 @@ local _strResourceCN = {
 	HOSTVM_CONFIG_FAILED = "无法生成 HostVM 配置文件: ",
 	HOSTVM_STALE_FAILED = "无法删除旧版本留下的 HostVM 文件: ",
 	ICU_FAILED = "无法部署 ICU 运行库: ",
+	VC_RUNTIME_OLD = "VC++ 运行库升级失败：当前版本 %s，本程序需要 %s 或更新的版本，否则泰极MPC 和 HostVM 无法启动。请重启计算机后以管理员身份运行 %s",
+	VC_RUNTIME_NONE = "未安装",
 	REQUIRED = "必装",
 	INSTALLED = "已安装",
 	INSTALLED_VERSION = "已安装版本 %s",
@@ -64,6 +69,8 @@ local _strResourceEN = {
 	HOSTVM_CONFIG_FAILED = "Failed to create the HostVM config: ",
 	HOSTVM_STALE_FAILED = "Failed to delete a HostVM file left by an earlier version: ",
 	ICU_FAILED = "Failed to deploy the ICU runtime: ",
+	VC_RUNTIME_OLD = "Failed to update the VC++ runtime: it is %s, and Tai-Ji MPC and HostVM need %s or newer to start. Restart the computer and run %s as administrator",
+	VC_RUNTIME_NONE = "not installed",
 	REQUIRED = "required",
 	INSTALLED = "installed",
 	INSTALLED_VERSION = "Installed version %s",
@@ -1429,6 +1436,49 @@ function InstallHaspRuntime()
     installx.ProcessExecute("\"" .. _dirCompany .. "\\Common\\hasp\\haspdinst.exe\" -install -nomsg")
 end
 
+-- The x64 VC++ runtime this machine has, as "major.minor.build", or nil when it has none or the
+-- version cannot be read.
+local VC_RUNTIME_KEY = "SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64"
+function InstalledVcRuntime()
+    local function value(name)
+        return tonumber(installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, VC_RUNTIME_KEY, name))
+    end
+    if value("Installed") ~= 1 then
+        return nil
+    end
+    local major, minor, build = value("Major"), value("Minor"), value("Bld")
+    if major == nil or minor == nil or build == nil then
+        return nil
+    end
+    return string.format("%d.%d.%d", major, minor, build)
+end
+
+-- Runs the bundled vc_redist.x64.exe unless the installed runtime is already VC_REDIST_VERSION or
+-- newer. Checking only that some runtime is installed let older ones through, and with one older
+-- than 14.40 the programs fail to start (0xc0000142): their DLLs lock a std::mutex while loading,
+-- which such a runtime cannot do. vc_redist itself does not downgrade a newer runtime.
+-- Returns false, after telling the user, when the runtime is still too old afterwards: neither the
+-- client nor HostVM would start.
+function InstallVcRuntime()
+    -- The registry keeps three fields, the redist's file version four.
+    local required = VC_REDIST_VERSION:match("^(%d+%.%d+%.%d+)") or VC_REDIST_VERSION
+    local installed = InstalledVcRuntime()
+    if installed ~= nil and not VersionOlderThan(installed, required) then
+        installx.LogPrint("Skip VC++ runtime, " .. installed .. " already installed")
+        return true
+    end
+    local redist = _dirCompany .. "\\Common\\vcredist\\vc_redist.x64.exe"
+    installx.LogPrint("Install VC++ runtime " .. VC_REDIST_VERSION .. ", installed " .. tostring(installed))
+    installx.ProcessExecute("\"" .. redist .. "\" /install /quiet /norestart", true, 300)
+    installed = InstalledVcRuntime()
+    if installed == nil or VersionOlderThan(installed, required) then
+        ErrorHint(string.format(_strResource.VC_RUNTIME_OLD, installed or _strResource.VC_RUNTIME_NONE,
+                                required, redist))
+        return false
+    end
+    return true
+end
+
 local function Progress(percent)
 	installx.DuiProgress("installprogress", percent, _strResource.LOADING  .. " " .. percent .. "%" )
 end
@@ -1481,9 +1531,8 @@ function PostSetup()
     end
 
 	Progress(94)
-    local vcRedist = installx.RegGetValue(HRootKey.HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64", "Installed")
-    if (vcRedist == nil or vcRedist == 0) then
-        installx.ProcessExecute("\"" .. _dirCompany .. "\\Common\\vcredist\\vc_redist.x64.exe\" /install /quiet /norestart", true, 60)
+    if not InstallVcRuntime() then
+        return false
     end
 
 	Progress(95)

@@ -131,6 +131,8 @@ local function scenario(options)
         serviceStates[service] = "stopped"
     end
     registry["software\\taijicontrol"] = {installpath = ROOT}
+    -- A VC++ runtime newer than any bundled one: vc_redist is left alone (tests/test_vc_runtime.lua).
+    registry["software\\microsoft\\visualstudio\\14.0\\vc\\runtimes\\x64"] = {installed = 1, major = 14, minor = 999, bld = 0}
     files[SYSTEM .. "\\icu.dll"] = true
     files[ROOT .. "\\HostVM\\hostvm.xml"] = true
     assert(loadfile("projects/TaijiMPC6/Install/Install.lua"))()
