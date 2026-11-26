@@ -146,6 +146,8 @@ local function scenario(options)
     for _, res in ipairs(options.missing or {}) do missing[res] = true end
     for _, path in ipairs(options.unsafe or {}) do unsafe[lower(path)] = true end
     if options.root then root = options.root else registry["software\\taijicontrol"] = {installpath = ROOT} end
+    -- A VC++ runtime newer than any bundled one: vc_redist is left alone (tests/test_vc_runtime.lua).
+    registry["software\\microsoft\\visualstudio\\14.0\\vc\\runtimes\\x64"] = {installed = 1, major = 14, minor = 999, bld = 0}
     files[lower(SYSTEM .. "\\icu.dll")] = true
     local hostvmXml = options.hostvmXml
     if hostvmXml == nil then hostvmXml = installed["TaijiMPC.HostVM"] == true end

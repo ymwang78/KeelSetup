@@ -148,7 +148,7 @@ rootKey 枚举：0=HKCR, 1=HKCU, 2=HKLM, 3=HKU, 4=HKCC
     └─ PostSetup()
             ├─      装 HostVM 时删掉旧版本留下、新包已经不带的文件（RemoveStaleHostVMFiles()：HostVM\modules\py\zcepy.dll，现在随 zce.dll 放在 HostVM\，旧的那份会先被 py 模块加载；HostVM\zcepy.dll 在时才删，旧布局的包里它是唯一的一份；删不掉就安装失败）
             ├─      System32 没有 icu.dll 时，把 Common\icu 的 icu.dll、icuuc.dll 拷进 TaiJiMPC6\（InstallIcuFallback()；拷不进去且目标不存在就安装失败）；System32 有 icu.dll 时删掉 TaiJiMPC6\icu.dll（以前的后备或手工放的，会盖住系统那份；删不掉就安装失败）
-            ├─ 94%  vc_redist.x64.exe /install /quiet /norestart（注册表判断跳过）
+            ├─ 94%  vc_redist.x64.exe /install /quiet /norestart（InstallVcRuntime()：已装的 x64 运行库不低于随包版本才跳过；装完仍低就安装失败）
             ├─ 94%  GBDA_Install_Prereq_x86.msi（OPC DA，注册表判断跳过）
             ├─ 95%  GBDA_Install_Prereq_x64.msi（OPC DA x64，注册表判断跳过）
             ├─ 96%  TaiJiOPCSim.exe -RegServer + 手动写 COM 类别与 DCOM 身份（AppID，RunAs=Interactive User）注册表（RegisterTaiJiOPCSim()；没装 TaiJiOPCSim 就跳过）
@@ -321,10 +321,12 @@ HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run
 
 | 组件 | 判断注册表路径 | 判断字段 |
 |------|--------------|---------|
-| vc_redist.x64 | `HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64` | `Installed` |
+| vc_redist.x64 | `HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64` | `Installed` 为 1 且 `Major.Minor.Bld` 逐段数值比较不低于随包版本才跳过 |
 | OPC DA x86 | `HKCR\WOW6432Node\CLSID\{13486D50-...}` | 路径存在即跳过 |
 | OPC DA x64 | `HKCR\CLSID\{13486D50-...}` | 路径存在即跳过 |
 | HASP 驱动 | `HKLM\SOFTWARE\Aladdin Knowledge Systems\HASP\Driver\Installer` | `DrvPkgVersion` 按点分逐段数值比较，>= 10.33 跳过 |
+
+VC++ 运行库的门槛是 `Install.lua` 里的 `VC_REDIST_VERSION`，由 `apps/KeelDeck/build_TaijiMPC6.py` 在打包时写成随包 `Common\vcredist\vc_redist.x64.exe` 的文件版本，打完恢复。以前只看 `Installed`，机器上有任何旧版运行库就不装随包的：6.3.45.24 在装着 14.29 运行库的现场机器上起不来（0xc0000142）。VS 2022 17.10（14.40）起 `std::mutex` 是 constexpr 构造，14.40 以前的 MSVCP140 给它加锁会访问空指针，而 keeldeck_core.dll、zce.dll 加载时的静态初始化就要加锁（`zce_singleton_slot`）。装完注册表里的版本仍低于门槛时安装失败，提示重启后以管理员身份运行随包的 vc_redist；被占用的旧 DLL 要重启才换掉，这种情况注册表已是新版本，安装器看不出来。
 
 Sentinel 运行时门槛是 `Install.lua` 里的 `HASP_RUNTIME_VERSION`，必须与随包的 `Common\hasp\haspdinst.exe` 版本一致，换安装器时一起改。tjonlinelib v3/v4 套了 Sentinel Envelope，需要 10.33 以上的运行时。`DrvPkgVersion` 读不到或不是点分数字时按需要安装处理；haspdinst 自己不会把更新的运行时降级（8.41 安装器在 10.31 机器上运行时，`aksdrvsetup.log` 记录 `New Version == bigger` 后没有安装）。
 
