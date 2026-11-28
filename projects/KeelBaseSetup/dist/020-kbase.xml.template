@@ -1,8 +1,9 @@
 <hostvm_fragment>
     <!-- The KeelBase instance of KeelBaseSetup. Install.lua copies this template to 020-kbase.xml on
          the first install; from then on 020-kbase.xml belongs to the site and upgrades keep it.
+         vmaddr="": listen on the host interfaces so clients can reach the advertised RPC port.
          vmport="0": KeelHost picks the control port. The instance keeps its own config
          (kbase_server.json: ports, retention, tokens, OPC UA/DA) and its data (data\) in its home
          directory, <projects_dir of hostvm.xml>\kbase01. -->
-    <subvm_info vmtype="KeelBase" vmname="kbase01" vmpath="kbase" vmaddr="127.0.0.1" vmport="0" />
+    <subvm_info vmtype="KeelBase" vmname="kbase01" vmpath="kbase" vmaddr="" vmport="0" />
 </hostvm_fragment>
