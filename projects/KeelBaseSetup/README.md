@@ -40,7 +40,8 @@ KeelBase 用**自己的一份 KeelHost**，与其他产品（TaijiMPC6）安装�
 | 7828/TCP、7829/TCP | 新装默认实例 `kbase01` 的 REST 与数据端口（`Data\kbase01\kbase_server.json`） |
 
 KeelBase 的固定端口统一保留在 `7820–7829`。控制面和事件端口在 `Host\keelhost.xml` 配置，
-具名工作进程的固定端口在对应的 KeelHost 实例配置里设置。其余工作进程由 KeelHost 自动分配端口。
+具名工作进程的固定端口在对应的 KeelHost 实例配置里设置。新安装的 kbase01 监听本机网卡，
+由 KeelHost 自动分配实例 RPC 端口，KeelDeck 从 7820 获取。升级沿用已有实例配置。
 
 ## 组件
 
